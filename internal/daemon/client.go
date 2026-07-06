@@ -16,7 +16,10 @@ import (
 	"github.com/yegor-usoltsev/MagicHop/internal/protocol"
 )
 
-const heartbeatInterval = time.Minute
+const (
+	heartbeatInterval = time.Minute
+	reconnectDelay    = time.Second
+)
 
 type Client struct {
 	Config    config.ClientConfig
@@ -30,6 +33,20 @@ type ClaimResult struct {
 }
 
 func (c Client) Run(ctx context.Context) error {
+	for {
+		if err := c.runConnected(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			slog.Warn("daemon connection failed; retrying", "err", err, "retry_after", reconnectDelay)
+		}
+		if err := sleep(ctx, reconnectDelay); err != nil {
+			return nil
+		}
+	}
+}
+
+func (c Client) runConnected(ctx context.Context) error {
 	nc, err := c.connect()
 	if err != nil {
 		return err
@@ -160,7 +177,14 @@ func (c Client) Status(ctx context.Context) (bool, []protocol.NodeStatus, error)
 }
 
 func (c Client) connect() (*nats.Conn, error) {
-	nc, err := nats.Connect(c.Config.CoordinatorURL, nats.Token(c.Config.AuthToken), nats.Name("magichop-"+c.Config.NodeName))
+	nc, err := nats.Connect(
+		c.Config.CoordinatorURL,
+		nats.Token(c.Config.AuthToken),
+		nats.Name("magichop-"+c.Config.NodeName),
+		nats.Timeout(2*time.Second),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(reconnectDelay),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
@@ -237,6 +261,17 @@ func requestTimeout(claimTimeout time.Duration) time.Duration {
 		return claimTimeout
 	}
 	return time.Second
+}
+
+func sleep(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("context done: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c Client) defaultAddress() string {

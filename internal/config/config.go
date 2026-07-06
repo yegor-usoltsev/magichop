@@ -79,9 +79,9 @@ func DefaultClientConfig() ClientConfig {
 		AuthToken:         "",
 		Devices:           map[string]string{},
 		DefaultDevice:     "",
-		ClaimTimeout:      Duration{Duration: 4 * time.Second},
-		ConnectTimeout:    Duration{Duration: 14 * time.Second},
-		DisconnectTimeout: Duration{Duration: 4 * time.Second},
+		ClaimTimeout:      Duration{Duration: 6 * time.Second},
+		ConnectTimeout:    Duration{Duration: 16 * time.Second},
+		DisconnectTimeout: Duration{Duration: 6 * time.Second},
 	}
 }
 
