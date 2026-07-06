@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,8 +68,38 @@ func TestWriteAndLoadClient(t *testing.T) {
 	if loaded.NodeName != "test-node" || loaded.ClaimTimeout.Duration != 2*time.Second {
 		t.Fatalf("unexpected loaded config: %#v", loaded)
 	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(raw), `"release_timeout"`) || strings.Contains(string(raw), `"disconnect_timeout"`) {
+		t.Fatalf("unexpected timeout keys in config: %s", raw)
+	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("unexpected file mode: %v %v", info, err)
+	}
+}
+
+func TestLoadClientAcceptsLegacyDisconnectTimeout(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+  "auth_token": "secret",
+  "devices": {"trackpad": "aa-bb-cc-dd-ee-ff"},
+  "default_device": "trackpad",
+  "disconnect_timeout": "9s"
+}
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	loaded, err := LoadClient(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if loaded.ReleaseTimeout.Duration != 9*time.Second {
+		t.Fatalf("release timeout = %s, want 9s", loaded.ReleaseTimeout.Duration)
 	}
 }
 

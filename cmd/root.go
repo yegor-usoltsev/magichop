@@ -25,7 +25,7 @@ import (
 type cli struct {
 	Coordinator coordinatorCmd `cmd:"" help:"Run the embedded NATS coordinator."`
 	Daemon      daemonCmd      `cmd:"" help:"Run the macOS client daemon."`
-	Claim       claimCmd       `cmd:"" help:"Claim a Bluetooth device."`
+	Claim       claimCmd       `cmd:"" help:"Claim a Magic peripheral."`
 	Status      statusCmd      `cmd:"" help:"Show local and coordinator status."`
 	Config      configCmd      `cmd:"" help:"Manage client configuration."`
 	Install     installCmd     `cmd:"" help:"Install helper integrations."`
@@ -103,7 +103,7 @@ func newParser(app *cli, exit func(int)) (*kong.Kong, error) {
 	parser, err := kong.New(
 		app,
 		kong.Name("magichop"),
-		kong.Description("Coordinate Bluetooth device claims between Macs."),
+		kong.Description("Share Magic Keyboard, Magic Mouse, and Magic Trackpad between Macs."),
 		kong.Exit(exit),
 		kong.ShortUsageOnError(),
 	)
@@ -159,11 +159,11 @@ func runDaemon(ctx context.Context, configPath string) int {
 
 type claimCmd struct {
 	clientOptions
-	Device string `arg:"" optional:"" help:"Device alias or Bluetooth MAC address."`
+	Peripheral string `arg:"" optional:"" name:"peripheral" help:"Magic peripheral alias or Bluetooth MAC address."`
 }
 
 func (c *claimCmd) Run(ctx *runContext) error {
-	return commandResult(runClaim(ctx.Context, c.Config, c.Device))
+	return commandResult(runClaim(ctx.Context, c.Config, c.Peripheral))
 }
 
 func runClaim(ctx context.Context, configPath, device string) int {
@@ -232,8 +232,8 @@ type configInitCmd struct {
 	NodeName       string   `name:"node-name" help:"Node name."`
 	CoordinatorURL string   `name:"coordinator-url" help:"Coordinator NATS URL."`
 	AuthToken      string   `name:"auth-token" help:"NATS auth token."`
-	DefaultDevice  string   `name:"default-device" help:"Default device alias."`
-	Devices        []string `name:"device" help:"Device alias=address. May be repeated."`
+	DefaultDevice  string   `name:"default-device" help:"Default Magic peripheral alias."`
+	Devices        []string `name:"device" help:"Magic peripheral alias=address. May be repeated."`
 }
 
 func (c *configInitCmd) Run(_ *runContext) error {

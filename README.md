@@ -116,20 +116,20 @@ Mac clients use `MAGICHOP_CONFIG` when it is set. Otherwise they read `~/.config
   "default_device": "trackpad",
   "claim_timeout": "6s",
   "connect_timeout": "15s",
-  "disconnect_timeout": "6s"
+  "release_timeout": "6s"
 }
 ```
 
 If `node_name` is empty, MagicHop uses the hostname. Device aliases are local names for Magic Keyboard, Magic Mouse, Magic Trackpad, or other Bluetooth MAC addresses.
 
-`claim_timeout` bounds each peer-release round. `connect_timeout` bounds the full local acquisition budget. MagicHop keeps the normal path short, but a temporarily stuck peripheral can still use the configured budget before the command fails.
+`claim_timeout` bounds the peer-release window. `connect_timeout` is the end-to-end claim budget, including peer release and local acquisition. `release_timeout` bounds how long a daemon spends unpairing a peripheral when another Mac claims it. Older configs that still use `disconnect_timeout` continue to load.
 
 ## Commands
 
 ```bash
 magichop coordinator
 magichop daemon
-magichop claim [device]
+magichop claim [peripheral]
 magichop status
 magichop config init
 magichop install mac

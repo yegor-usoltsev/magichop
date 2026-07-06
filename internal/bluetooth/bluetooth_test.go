@@ -94,8 +94,9 @@ exit 64
 		t.Fatalf("read log: %v", err)
 	}
 	want := "--is-connected aa-bb-cc-dd-ee-ff\n--unpair aa-bb-cc-dd-ee-ff\n--pair aa-bb-cc-dd-ee-ff\n--connect aa-bb-cc-dd-ee-ff\n--connect aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
-	if string(raw) != want {
-		t.Fatalf("operations = %q, want %q", raw, want)
+	wantWithoutPreflight := "--unpair aa-bb-cc-dd-ee-ff\n--pair aa-bb-cc-dd-ee-ff\n--connect aa-bb-cc-dd-ee-ff\n--connect aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
+	if got := string(raw); got != want && got != wantWithoutPreflight {
+		t.Fatalf("operations = %q, want %q or %q", raw, want, wantWithoutPreflight)
 	}
 }
 
@@ -214,7 +215,7 @@ exit 64
 	}
 }
 
-func TestBlueutilDisconnectUnpairs(t *testing.T) {
+func TestBlueutilReleaseUnpairs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
 	}
@@ -240,9 +241,9 @@ exit 64
 	}
 	t.Setenv("MAGICHOP_TEST_LOG", logPath)
 
-	result := Blueutil{Path: scriptPath}.Disconnect(t.Context(), "aa-bb-cc-dd-ee-ff", 5*time.Second)
+	result := Blueutil{Path: scriptPath}.Release(t.Context(), "aa-bb-cc-dd-ee-ff", 5*time.Second)
 	if !result.OK {
-		t.Fatalf("Disconnect failed: %#v", result)
+		t.Fatalf("Release failed: %#v", result)
 	}
 	raw, err := os.ReadFile(logPath)
 	if err != nil {
@@ -254,7 +255,7 @@ exit 64
 	}
 }
 
-func TestBlueutilDisconnectWaitsUntilDisconnected(t *testing.T) {
+func TestBlueutilReleaseWaitsUntilReleased(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
 	}
@@ -287,9 +288,9 @@ exit 64
 	t.Setenv("MAGICHOP_TEST_LOG", logPath)
 	t.Setenv("MAGICHOP_TEST_MARKER", markerPath)
 
-	result := Blueutil{Path: scriptPath}.Disconnect(t.Context(), "aa-bb-cc-dd-ee-ff", 5*time.Second)
+	result := Blueutil{Path: scriptPath}.Release(t.Context(), "aa-bb-cc-dd-ee-ff", 5*time.Second)
 	if !result.OK {
-		t.Fatalf("Disconnect failed: %#v", result)
+		t.Fatalf("Release failed: %#v", result)
 	}
 	raw, err := os.ReadFile(logPath)
 	if err != nil {

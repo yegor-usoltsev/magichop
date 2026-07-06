@@ -10,9 +10,9 @@ type Fake struct {
 	mu              sync.Mutex
 	Connected       []string
 	ConnectTimeouts []time.Duration
-	Disconnected    []string
+	Released        []string
 	FailConnects    int
-	FailDisconnect  bool
+	FailRelease     bool
 }
 
 func (f *Fake) Connect(_ context.Context, address string, timeout time.Duration) Result {
@@ -27,12 +27,12 @@ func (f *Fake) Connect(_ context.Context, address string, timeout time.Duration)
 	return Result{OK: true}
 }
 
-func (f *Fake) Disconnect(_ context.Context, address string, _ time.Duration) Result {
+func (f *Fake) Release(_ context.Context, address string, _ time.Duration) Result {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Disconnected = append(f.Disconnected, address)
-	if f.FailDisconnect {
-		return Result{OK: false, Error: "disconnect failed"}
+	f.Released = append(f.Released, address)
+	if f.FailRelease {
+		return Result{OK: false, Error: "release failed"}
 	}
 	return Result{OK: true}
 }

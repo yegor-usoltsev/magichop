@@ -12,30 +12,18 @@ import (
 	"github.com/yegor-usoltsev/MagicHop/internal/coordinator"
 )
 
-func TestClaimDisconnectsPeerThenConnectsLocal(t *testing.T) {
+func TestClaimReleasesPeerThenConnectsLocal(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
 
-	token := "secret"
-	serverCfg := config.ServerConfig{ServerHost: "127.0.0.1", ServerPort: freePort(t), AuthToken: token}
-	go func() {
-		if err := coordinator.New(serverCfg).Run(ctx); err != nil && ctx.Err() == nil {
-			t.Errorf("coordinator failed: %v", err)
-		}
-	}()
-	time.Sleep(200 * time.Millisecond)
+	serverCfg := startCoordinator(t, ctx)
 
 	aBT := &bluetooth.Fake{}
 	bBT := &bluetooth.Fake{}
 	a := Client{Config: testConfig("mac-a", serverCfg.ServerPort), Bluetooth: aBT}
 	b := Client{Config: testConfig("mac-b", serverCfg.ServerPort), Bluetooth: bBT}
-	go func() {
-		if err := b.Run(ctx); err != nil && ctx.Err() == nil {
-			t.Errorf("daemon failed: %v", err)
-		}
-	}()
-	time.Sleep(200 * time.Millisecond)
+	startDaemon(t, ctx, b)
 
 	result, err := a.Claim(ctx, "device")
 	if err != nil {
@@ -44,8 +32,8 @@ func TestClaimDisconnectsPeerThenConnectsLocal(t *testing.T) {
 	if len(result.Acks) != 1 || !result.Acks[0].OK || result.Acks[0].Node != "mac-b" {
 		t.Fatalf("unexpected acks: %#v", result.Acks)
 	}
-	if len(bBT.Disconnected) != 1 || bBT.Disconnected[0] != "aa-bb-cc-dd-ee-ff" {
-		t.Fatalf("peer disconnects: %#v", bBT.Disconnected)
+	if len(bBT.Released) != 1 || bBT.Released[0] != "aa-bb-cc-dd-ee-ff" {
+		t.Fatalf("peer releases: %#v", bBT.Released)
 	}
 	if len(aBT.Connected) != 1 || aBT.Connected[0] != "aa-bb-cc-dd-ee-ff" {
 		t.Fatalf("local connects: %#v", aBT.Connected)
@@ -57,14 +45,7 @@ func TestClaimDoesNotWaitForStalePeerStatus(t *testing.T) {
 
 	ctx := t.Context()
 
-	token := "secret"
-	serverCfg := config.ServerConfig{ServerHost: "127.0.0.1", ServerPort: freePort(t), AuthToken: token}
-	go func() {
-		if err := coordinator.New(serverCfg).Run(ctx); err != nil && ctx.Err() == nil {
-			t.Errorf("coordinator failed: %v", err)
-		}
-	}()
-	time.Sleep(200 * time.Millisecond)
+	serverCfg := startCoordinator(t, ctx)
 
 	aBT := &bluetooth.Fake{}
 	bBT := &bluetooth.Fake{}
@@ -72,14 +53,7 @@ func TestClaimDoesNotWaitForStalePeerStatus(t *testing.T) {
 	b := Client{Config: testConfig("mac-b", serverCfg.ServerPort), Bluetooth: bBT}
 
 	bCtx, stopB := context.WithCancel(ctx)
-	bDone := make(chan struct{})
-	go func() {
-		defer close(bDone)
-		if err := b.Run(bCtx); err != nil && bCtx.Err() == nil {
-			t.Errorf("daemon failed: %v", err)
-		}
-	}()
-	time.Sleep(200 * time.Millisecond)
+	bDone := startDaemon(t, bCtx, b)
 	stopB()
 	<-bDone
 
@@ -99,54 +73,40 @@ func TestClaimDoesNotWaitForStalePeerStatus(t *testing.T) {
 	}
 }
 
-func TestClaimRetriesReleaseWhenLocalConnectFails(t *testing.T) {
+func TestClaimUsesSinglePeerReleaseAndRemainingConnectBudget(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
 
-	token := "secret"
-	serverCfg := config.ServerConfig{ServerHost: "127.0.0.1", ServerPort: freePort(t), AuthToken: token}
-	go func() {
-		if err := coordinator.New(serverCfg).Run(ctx); err != nil && ctx.Err() == nil {
-			t.Errorf("coordinator failed: %v", err)
-		}
-	}()
-	time.Sleep(200 * time.Millisecond)
+	serverCfg := startCoordinator(t, ctx)
 
 	aBT := &bluetooth.Fake{FailConnects: 1}
 	bBT := &bluetooth.Fake{}
-	a := Client{Config: testConfig("mac-a", serverCfg.ServerPort), Bluetooth: aBT}
+	aCfg := testConfig("mac-a", serverCfg.ServerPort)
+	aCfg.ConnectTimeout.Duration = 1500 * time.Millisecond
+	aCfg.ClaimTimeout.Duration = time.Second
+	a := Client{Config: aCfg, Bluetooth: aBT}
 	b := Client{Config: testConfig("mac-b", serverCfg.ServerPort), Bluetooth: bBT}
-	go func() {
-		if err := b.Run(ctx); err != nil && ctx.Err() == nil {
-			t.Errorf("daemon failed: %v", err)
-		}
-	}()
-	time.Sleep(200 * time.Millisecond)
+	startDaemon(t, ctx, b)
 
 	result, err := a.Claim(ctx, "device")
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if !result.Connect.OK {
-		t.Fatalf("connect failed: %#v", result.Connect)
+	if result.Connect.OK {
+		t.Fatalf("connect unexpectedly succeeded: %#v", result.Connect)
 	}
-	if len(bBT.Disconnected) != 2 {
-		t.Fatalf("peer disconnect count = %d, want 2: %#v", len(bBT.Disconnected), bBT.Disconnected)
+	if len(bBT.Released) != 1 {
+		t.Fatalf("peer release count = %d, want 1: %#v", len(bBT.Released), bBT.Released)
 	}
-	if len(aBT.Connected) != 2 {
-		t.Fatalf("local connect count = %d, want 2: %#v", len(aBT.Connected), aBT.Connected)
+	if len(aBT.Connected) != 1 {
+		t.Fatalf("local connect count = %d, want 1: %#v", len(aBT.Connected), aBT.Connected)
 	}
-}
-
-func TestClaimConnectTimeoutHasMinimum(t *testing.T) {
-	t.Parallel()
-
-	if got := claimConnectTimeout(5 * time.Second); got != minimumClaimConnectTimeout {
-		t.Fatalf("claimConnectTimeout below minimum = %s, want %s", got, minimumClaimConnectTimeout)
+	if len(aBT.ConnectTimeouts) != 1 {
+		t.Fatalf("connect timeouts: %#v", aBT.ConnectTimeouts)
 	}
-	if got := claimConnectTimeout(2 * time.Minute); got != 2*time.Minute {
-		t.Fatalf("claimConnectTimeout above minimum = %s, want 2m", got)
+	if timeout := aBT.ConnectTimeouts[0]; timeout <= time.Second || timeout > aCfg.ConnectTimeout.Duration {
+		t.Fatalf("connect timeout = %s, want remaining budget near %s", timeout, aCfg.ConnectTimeout.Duration)
 	}
 }
 
@@ -159,6 +119,33 @@ func testConfig(node string, port uint16) config.ClientConfig {
 	cfg.DefaultDevice = "device"
 	cfg.ClaimTimeout.Duration = 2 * time.Second
 	return cfg
+}
+
+func startCoordinator(t *testing.T, ctx context.Context) config.ServerConfig {
+	t.Helper()
+
+	serverCfg := config.ServerConfig{ServerHost: "127.0.0.1", ServerPort: freePort(t), AuthToken: "secret"}
+	go func() {
+		if err := coordinator.New(serverCfg).Run(ctx); err != nil && ctx.Err() == nil {
+			t.Errorf("coordinator failed: %v", err)
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	return serverCfg
+}
+
+func startDaemon(t *testing.T, ctx context.Context, client Client) <-chan struct{} {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := client.Run(ctx); err != nil && ctx.Err() == nil {
+			t.Errorf("daemon failed: %v", err)
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	return done
 }
 
 func freePort(t *testing.T) uint16 {

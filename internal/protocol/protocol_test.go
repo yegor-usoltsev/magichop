@@ -20,7 +20,7 @@ func TestCommandJSON(t *testing.T) {
 	deadline := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
 	msg := CommandMessage{
 		ID:            "cmd-1",
-		Type:          CommandTypeDisconnectDevice,
+		Type:          CommandTypeReleaseDevice,
 		FromNode:      "mac-a",
 		DeviceAddress: "aa-bb-cc-dd-ee-ff",
 		Deadline:      deadline,
@@ -120,7 +120,7 @@ func TestCommandValidation(t *testing.T) {
 	now := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
 	valid := CommandMessage{
 		ID:            "cmd-1",
-		Type:          CommandTypeDisconnectDevice,
+		Type:          CommandTypeReleaseDevice,
 		FromNode:      "mac-a",
 		DeviceAddress: "aa-bb-cc-dd-ee-ff",
 		Deadline:      now.Add(time.Second),

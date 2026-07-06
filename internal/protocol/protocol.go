@@ -15,7 +15,10 @@ const (
 	SubjectCommandsBroadcast = "magichop.commands.broadcast"
 	SubjectStatusRequest     = "magichop.status.request"
 
-	CommandTypeDisconnectDevice = "disconnect_device"
+	CommandTypeReleaseDevice = "disconnect_device"
+
+	// CommandTypeDisconnectDevice is kept as a wire-compatible alias for older clients.
+	CommandTypeDisconnectDevice = CommandTypeReleaseDevice
 )
 
 var bluetoothAddressPattern = regexp.MustCompile(`(?i)^[0-9a-f]{2}([-:][0-9a-f]{2}){5}$`)
@@ -96,7 +99,7 @@ func (m CommandMessage) Validate(now time.Time) error {
 	if m.ID == "" {
 		return errors.New("command id is required")
 	}
-	if m.Type != CommandTypeDisconnectDevice {
+	if m.Type != CommandTypeReleaseDevice {
 		return fmt.Errorf("unsupported command type: %s", m.Type)
 	}
 	if m.FromNode == "" {

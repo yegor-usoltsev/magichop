@@ -22,7 +22,7 @@ const (
 
 type Backend interface {
 	Connect(ctx context.Context, address string, timeout time.Duration) Result
-	Disconnect(ctx context.Context, address string, timeout time.Duration) Result
+	Release(ctx context.Context, address string, timeout time.Duration) Result
 	IsConnected(ctx context.Context, address string, timeout time.Duration) (bool, Result)
 }
 
@@ -56,6 +56,9 @@ func NewBlueutil() (*Blueutil, error) {
 }
 
 func (b Blueutil) Connect(ctx context.Context, address string, timeout time.Duration) Result {
+	if timeout <= 0 {
+		return Result{Error: context.DeadlineExceeded.Error()}
+	}
 	deadline := time.Now().Add(timeout)
 	connected, result := b.IsConnected(ctx, address, minDuration(2*time.Second, time.Until(deadline)))
 	if connected {
@@ -67,7 +70,10 @@ func (b Blueutil) Connect(ctx context.Context, address string, timeout time.Dura
 	return b.attach(ctx, address, deadline)
 }
 
-func (b Blueutil) Disconnect(ctx context.Context, address string, timeout time.Duration) Result {
+func (b Blueutil) Release(ctx context.Context, address string, timeout time.Duration) Result {
+	if timeout <= 0 {
+		return Result{Error: context.DeadlineExceeded.Error()}
+	}
 	deadline := time.Now().Add(timeout)
 	unpair := b.run(ctx, Args("unpair", address), minDuration(releaseAttemptTimeout, time.Until(deadline)))
 	result, ok := b.waitForConnectionState(ctx, address, false, deadline)
@@ -141,23 +147,10 @@ func (b Blueutil) attach(ctx context.Context, address string, deadline time.Time
 			}
 			return Result{Error: context.DeadlineExceeded.Error()}
 		}
-		_ = b.run(ctx, Args("unpair", address), minDuration(releaseAttemptTimeout, time.Until(deadline)))
-		if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
-			if haveLast {
-				return last
-			}
-			return Result{Error: err.Error()}
-		}
-		last = b.run(ctx, Args("pair", address), minDuration(pairAttemptTimeout, time.Until(deadline)))
+		last = b.attachOnce(ctx, address, deadline)
 		haveLast = true
 		if last.OK {
-			if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
-				return Result{Error: err.Error()}
-			}
-			last = b.connectPaired(ctx, address, deadline)
-			if last.OK {
-				return last
-			}
+			return last
 		}
 		if ctx.Err() != nil {
 			last.Error = ctx.Err().Error()
@@ -167,6 +160,21 @@ func (b Blueutil) attach(ctx context.Context, address string, deadline time.Time
 			return last
 		}
 	}
+}
+
+func (b Blueutil) attachOnce(ctx context.Context, address string, deadline time.Time) Result {
+	_ = b.run(ctx, Args("unpair", address), minDuration(releaseAttemptTimeout, time.Until(deadline)))
+	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+		return Result{Error: err.Error()}
+	}
+	pair := b.run(ctx, Args("pair", address), minDuration(pairAttemptTimeout, time.Until(deadline)))
+	if !pair.OK {
+		return pair
+	}
+	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+		return Result{Error: err.Error()}
+	}
+	return b.connectPaired(ctx, address, deadline)
 }
 
 func (b Blueutil) connectPaired(ctx context.Context, address string, deadline time.Time) Result {

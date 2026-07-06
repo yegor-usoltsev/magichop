@@ -14,10 +14,10 @@ func TestKongParsesClaimArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse args: %v", err)
 	}
-	if ctx.Command() != "claim <device>" {
+	if ctx.Command() != "claim <peripheral>" {
 		t.Fatalf("unexpected command: %s", ctx.Command())
 	}
-	if app.Claim.Config != "/tmp/cfg.json" || app.Claim.Device != "device" {
+	if app.Claim.Config != "/tmp/cfg.json" || app.Claim.Peripheral != "device" {
 		t.Fatalf("unexpected args: %#v", app.Claim)
 	}
 }

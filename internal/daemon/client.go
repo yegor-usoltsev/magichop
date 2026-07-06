@@ -17,10 +17,8 @@ import (
 )
 
 const (
-	heartbeatInterval          = time.Minute
-	minimumClaimConnectTimeout = 15 * time.Second
-	reconnectDelay             = time.Second
-	singleClaimConnectTimeout  = 8 * time.Second
+	heartbeatInterval = time.Minute
+	reconnectDelay    = time.Second
 )
 
 type Client struct {
@@ -89,25 +87,7 @@ func (c Client) Claim(ctx context.Context, deviceRef string) (ClaimResult, error
 	}
 	defer nc.Close()
 
-	overallDeadline := time.Now().Add(claimConnectTimeout(c.Config.ConnectTimeout.Duration))
-	var last ClaimResult
-	for time.Now().Before(overallDeadline) {
-		result, err := c.claimRound(ctx, nc, address, overallDeadline)
-		if err != nil {
-			return ClaimResult{}, err
-		}
-		last = result
-		if result.Connect.OK {
-			return result, nil
-		}
-		if ctx.Err() != nil {
-			return ClaimResult{}, fmt.Errorf("claim canceled: %w", ctx.Err())
-		}
-	}
-	if last.CommandID != "" {
-		return last, nil
-	}
-	return ClaimResult{}, fmt.Errorf("claim canceled: %w", context.DeadlineExceeded)
+	return c.claimRound(ctx, nc, address, time.Now().Add(c.Config.ConnectTimeout.Duration))
 }
 
 func (c Client) claimRound(ctx context.Context, nc *nats.Conn, address string, overallDeadline time.Time) (ClaimResult, error) {
@@ -140,21 +120,25 @@ func (c Client) claimRound(ctx context.Context, nc *nats.Conn, address string, o
 		return ClaimResult{}, fmt.Errorf("flush ack subscription: %w", err)
 	}
 
-	claimTimeout := minDuration(c.Config.ClaimTimeout.Duration, time.Until(overallDeadline))
-	if claimTimeout <= 0 {
+	roundDeadline := minTime(time.Now().Add(c.Config.ClaimTimeout.Duration), overallDeadline)
+	if !roundDeadline.After(time.Now()) {
 		return ClaimResult{}, fmt.Errorf("claim canceled: %w", context.DeadlineExceeded)
 	}
 	claim := protocol.ClaimMessage{
 		ID:            commandID,
 		FromNode:      c.Config.NodeName,
 		DeviceAddress: address,
-		Deadline:      time.Now().UTC().Add(claimTimeout),
+		Deadline:      roundDeadline.UTC(),
 	}
 	raw, err := json.Marshal(claim)
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("marshal claim: %w", err)
 	}
-	msg, err := nc.Request(protocol.SubjectCommandsClaim, raw, requestTimeout(claimTimeout))
+	requestWait := time.Until(roundDeadline)
+	if requestWait <= 0 {
+		return ClaimResult{}, fmt.Errorf("claim canceled: %w", context.DeadlineExceeded)
+	}
+	msg, err := nc.Request(protocol.SubjectCommandsClaim, raw, requestTimeout(requestWait))
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("request claim: %w", err)
 	}
@@ -163,17 +147,21 @@ func (c Client) claimRound(ctx context.Context, nc *nats.Conn, address string, o
 		return ClaimResult{}, fmt.Errorf("decode claim response: %w", err)
 	}
 
-	timer := time.NewTimer(claimTimeout)
-	defer timer.Stop()
 	expected := response.ExpectedAcks
 	acks := make([]protocol.AckMessage, 0, expected)
 	seen := make(map[string]bool)
+	if expected == 0 {
+		result := c.Bluetooth.Connect(ctx, address, time.Until(overallDeadline))
+		return ClaimResult{CommandID: commandID, Acks: acks, Connect: result}, nil
+	}
+	timer := time.NewTimer(time.Until(roundDeadline))
+	defer timer.Stop()
 	for len(acks) < expected {
 		select {
 		case <-ctx.Done():
 			return ClaimResult{}, fmt.Errorf("claim canceled: %w", ctx.Err())
 		case <-timer.C:
-			result := c.Bluetooth.Connect(ctx, address, localConnectAttemptTimeout(overallDeadline))
+			result := c.Bluetooth.Connect(ctx, address, time.Until(overallDeadline))
 			return ClaimResult{CommandID: commandID, Acks: sortedAcks(acks), Connect: result}, nil
 		case ack := <-ackCh:
 			if ack.Node == c.Config.NodeName || seen[ack.Node] {
@@ -183,7 +171,7 @@ func (c Client) claimRound(ctx context.Context, nc *nats.Conn, address string, o
 			acks = append(acks, ack)
 		}
 	}
-	result := c.Bluetooth.Connect(ctx, address, localConnectAttemptTimeout(overallDeadline))
+	result := c.Bluetooth.Connect(ctx, address, time.Until(overallDeadline))
 	return ClaimResult{CommandID: commandID, Acks: sortedAcks(acks), Connect: result}, nil
 }
 
@@ -254,7 +242,7 @@ func (c Client) handleCommand(ctx context.Context, nc *nats.Conn) nats.MsgHandle
 			ack.OK = false
 			ack.Error = err.Error()
 		} else {
-			result := c.Bluetooth.Disconnect(ctx, cmd.DeviceAddress, c.Config.DisconnectTimeout.Duration)
+			result := c.Bluetooth.Release(ctx, cmd.DeviceAddress, c.Config.ReleaseTimeout.Duration)
 			ack.OK = result.OK
 			if !result.OK {
 				ack.Error = result.Message()
@@ -291,19 +279,15 @@ func requestTimeout(claimTimeout time.Duration) time.Duration {
 	return time.Second
 }
 
-func claimConnectTimeout(configured time.Duration) time.Duration {
-	if configured < minimumClaimConnectTimeout {
-		return minimumClaimConnectTimeout
-	}
-	return configured
-}
-
-func localConnectAttemptTimeout(deadline time.Time) time.Duration {
-	return minDuration(singleClaimConnectTimeout, time.Until(deadline))
-}
-
 func minDuration(a, b time.Duration) time.Duration {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
 		return a
 	}
 	return b

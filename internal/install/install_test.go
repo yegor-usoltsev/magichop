@@ -44,13 +44,13 @@ func TestGenerateRaycastScript(t *testing.T) {
 		"#!/bin/bash",
 		"# Required parameters:",
 		"# @raycast.schemaVersion 1",
-		"# @raycast.title Claim Bluetooth Device",
+		"# @raycast.title Claim Magic Peripheral",
 		"# @raycast.mode compact",
 		"# @raycast.packageName MagicHop",
 		"# Optional parameters:",
 		"# @raycast.needsConfirmation false",
 		"# Documentation:",
-		"# @raycast.description Claim the default configured Bluetooth device through MagicHop.",
+		"# @raycast.description Claim the default configured Magic peripheral through MagicHop.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q: %s", want, text)

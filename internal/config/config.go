@@ -20,14 +20,14 @@ const (
 )
 
 type ClientConfig struct {
-	NodeName          string            `json:"node_name"`
-	CoordinatorURL    string            `json:"coordinator_url"`
-	AuthToken         string            `json:"auth_token"`
-	Devices           map[string]string `json:"devices"`
-	DefaultDevice     string            `json:"default_device"`
-	ClaimTimeout      Duration          `json:"claim_timeout"`
-	ConnectTimeout    Duration          `json:"connect_timeout"`
-	DisconnectTimeout Duration          `json:"disconnect_timeout"`
+	NodeName       string            `json:"node_name"`
+	CoordinatorURL string            `json:"coordinator_url"`
+	AuthToken      string            `json:"auth_token"`
+	Devices        map[string]string `json:"devices"`
+	DefaultDevice  string            `json:"default_device"`
+	ClaimTimeout   Duration          `json:"claim_timeout"`
+	ConnectTimeout Duration          `json:"connect_timeout"`
+	ReleaseTimeout Duration          `json:"release_timeout"`
 }
 
 type ServerConfig struct {
@@ -61,6 +61,30 @@ func (d *Duration) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+func (cfg *ClientConfig) UnmarshalJSON(raw []byte) error {
+	type clientConfig ClientConfig
+	if err := json.Unmarshal(raw, (*clientConfig)(cfg)); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	if _, ok := fields["release_timeout"]; ok {
+		return nil
+	}
+	legacy, ok := fields["disconnect_timeout"]
+	if !ok {
+		return nil
+	}
+	var timeout Duration
+	if err := json.Unmarshal(legacy, &timeout); err != nil {
+		return fmt.Errorf("decode disconnect_timeout: %w", err)
+	}
+	cfg.ReleaseTimeout = timeout
+	return nil
+}
+
 func DefaultPath() (string, error) {
 	if path := os.Getenv("MAGICHOP_CONFIG"); path != "" {
 		return path, nil
@@ -74,14 +98,14 @@ func DefaultPath() (string, error) {
 
 func DefaultClientConfig() ClientConfig {
 	return ClientConfig{
-		NodeName:          "",
-		CoordinatorURL:    "nats://coordinator.local:4222",
-		AuthToken:         "",
-		Devices:           map[string]string{},
-		DefaultDevice:     "",
-		ClaimTimeout:      Duration{Duration: 6 * time.Second},
-		ConnectTimeout:    Duration{Duration: 15 * time.Second},
-		DisconnectTimeout: Duration{Duration: 6 * time.Second},
+		NodeName:       "",
+		CoordinatorURL: "nats://coordinator.local:4222",
+		AuthToken:      "",
+		Devices:        map[string]string{},
+		DefaultDevice:  "",
+		ClaimTimeout:   Duration{Duration: 6 * time.Second},
+		ConnectTimeout: Duration{Duration: 15 * time.Second},
+		ReleaseTimeout: Duration{Duration: 6 * time.Second},
 	}
 }
 
@@ -89,9 +113,10 @@ func InitClientConfig() ClientConfig {
 	cfg := DefaultClientConfig()
 	cfg.AuthToken = "CHANGE_ME"
 	cfg.Devices = map[string]string{
-		"device": "aa-bb-cc-dd-ee-ff",
+		"keyboard": "aa-bb-cc-dd-ee-01",
+		"trackpad": "aa-bb-cc-dd-ee-02",
 	}
-	cfg.DefaultDevice = "device"
+	cfg.DefaultDevice = "trackpad"
 	return cfg
 }
 
@@ -168,8 +193,8 @@ func (cfg ClientConfig) Validate() error {
 	if cfg.ConnectTimeout.Duration <= 0 {
 		return errors.New("connect_timeout must be positive")
 	}
-	if cfg.DisconnectTimeout.Duration <= 0 {
-		return errors.New("disconnect_timeout must be positive")
+	if cfg.ReleaseTimeout.Duration <= 0 {
+		return errors.New("release_timeout must be positive")
 	}
 	return nil
 }

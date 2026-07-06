@@ -130,7 +130,7 @@ func (c *Coordinator) handleClaim(nc *nats.Conn) nats.MsgHandler {
 		)
 		cmd := protocol.CommandMessage{
 			ID:            claim.ID,
-			Type:          protocol.CommandTypeDisconnectDevice,
+			Type:          protocol.CommandTypeReleaseDevice,
 			FromNode:      claim.FromNode,
 			DeviceAddress: claim.DeviceAddress,
 			Deadline:      claim.Deadline,
