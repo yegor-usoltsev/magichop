@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,16 +171,27 @@ func (c *Coordinator) commandSubscribers(fromNode string) int {
 		slog.Warn("failed to inspect command subscribers", "err", err)
 		return 0
 	}
-	count := 0
-	for _, conn := range connz.Conns {
+	return countCommandSubscribers(connz.Conns, fromNode)
+}
+
+func countCommandSubscribers(conns []*server.ConnInfo, fromNode string) int {
+	subscribers := make(map[string]struct{})
+	for _, conn := range conns {
 		if conn.Name == "magichop-"+fromNode {
 			continue
 		}
 		if slices.Contains(conn.Subs, protocol.SubjectCommandsBroadcast) {
-			count++
+			subscribers[commandSubscriberKey(conn)] = struct{}{}
 		}
 	}
-	return count
+	return len(subscribers)
+}
+
+func commandSubscriberKey(conn *server.ConnInfo) string {
+	if node, ok := strings.CutPrefix(conn.Name, "magichop-"); ok && node != "" {
+		return "node:" + node
+	}
+	return fmt.Sprintf("conn:%d", conn.Cid)
 }
 
 func (c *Coordinator) handleStatus(nc *nats.Conn) nats.MsgHandler {

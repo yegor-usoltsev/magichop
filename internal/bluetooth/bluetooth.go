@@ -11,8 +11,10 @@ import (
 
 const (
 	connectAttemptTimeout = 3 * time.Second
+	connectVerifyTimeout  = 1500 * time.Millisecond
 	connectRetryDelay     = 300 * time.Millisecond
 	pairSettleDelay       = 500 * time.Millisecond
+	stateCheckTimeout     = 750 * time.Millisecond
 )
 
 type Backend interface {
@@ -81,7 +83,11 @@ func (b Blueutil) Disconnect(ctx context.Context, address string, timeout time.D
 	}
 	unpair := b.run(ctx, Args("unpair", address), minDuration(2*time.Second, time.Until(deadline)))
 	if unpair.OK || disconnect.OK {
-		return unpair
+		result, ok := b.waitForConnectionState(ctx, address, false, deadline)
+		if ok {
+			return result
+		}
+		return result
 	}
 	return Result{ReturnCode: unpair.ReturnCode, Stdout: unpair.Stdout, Stderr: unpair.Stderr, Error: disconnect.Message() + "; " + unpair.Message()}
 }
@@ -139,17 +145,24 @@ func Args(action, address string) []string {
 
 func (b Blueutil) connectPaired(ctx context.Context, address string, deadline time.Time) Result {
 	var last Result
+	haveLast := false
 	for {
 		attemptTimeout := minDuration(connectAttemptTimeout, time.Until(deadline))
 		if attemptTimeout <= 0 {
-			if last.Message() != "" {
+			if haveLast {
 				return last
 			}
 			return Result{Error: context.DeadlineExceeded.Error()}
 		}
 		last = b.run(ctx, Args("connect", address), attemptTimeout)
+		haveLast = true
 		if last.OK {
-			return last
+			verifyDeadline := time.Now().Add(minDuration(connectVerifyTimeout, time.Until(deadline)))
+			result, ok := b.waitForConnectionState(ctx, address, true, verifyDeadline)
+			if ok {
+				return result
+			}
+			last = result
 		}
 		if ctx.Err() != nil {
 			last.Error = ctx.Err().Error()
@@ -159,6 +172,46 @@ func (b Blueutil) connectPaired(ctx context.Context, address string, deadline ti
 			return last
 		}
 	}
+}
+
+func (b Blueutil) waitForConnectionState(ctx context.Context, address string, connectedState bool, deadline time.Time) (Result, bool) {
+	var last Result
+	haveLast := false
+	for {
+		checkTimeout := minDuration(stateCheckTimeout, time.Until(deadline))
+		if checkTimeout <= 0 {
+			if haveLast {
+				return stateMismatchResult(last, connectedState), false
+			}
+			return Result{Error: context.DeadlineExceeded.Error()}, false
+		}
+		connected, result := b.IsConnected(ctx, address, checkTimeout)
+		last = result
+		haveLast = true
+		if result.OK && connected == connectedState {
+			return result, true
+		}
+		if ctx.Err() != nil {
+			result.Error = ctx.Err().Error()
+			return result, false
+		}
+		if err := sleepUntil(ctx, connectRetryDelay, deadline); err != nil {
+			return stateMismatchResult(last, connectedState), false
+		}
+	}
+}
+
+func stateMismatchResult(result Result, connectedState bool) Result {
+	if !result.OK {
+		return result
+	}
+	result.OK = false
+	if connectedState {
+		result.Error = "device did not report connected"
+	} else {
+		result.Error = "device did not report disconnected"
+	}
+	return result
 }
 
 func sleepUntil(ctx context.Context, delay time.Duration, deadline time.Time) error {
