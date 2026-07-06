@@ -3,6 +3,7 @@ module github.com/yegor-usoltsev/MagicHop
 go 1.26.4
 
 require (
+	github.com/alecthomas/kong v1.15.0
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/nats-io/nats-server/v2 v2.12.2
 	github.com/nats-io/nats.go v1.47.0

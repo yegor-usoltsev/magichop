@@ -52,7 +52,7 @@ type asset struct {
 
 func Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.CurrentVersion == "" || opts.CurrentVersion == "dev" {
-		return Result{}, errors.New("self-upgrade requires a release build")
+		return Result{}, errors.New("upgrade requires a release build")
 	}
 	if opts.ExecutablePath == "" {
 		path, err := os.Executable()
