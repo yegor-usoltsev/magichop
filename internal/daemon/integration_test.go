@@ -99,6 +99,57 @@ func TestClaimDoesNotWaitForStalePeerStatus(t *testing.T) {
 	}
 }
 
+func TestClaimRetriesReleaseWhenLocalConnectFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	token := "secret"
+	serverCfg := config.ServerConfig{ServerHost: "127.0.0.1", ServerPort: freePort(t), AuthToken: token}
+	go func() {
+		if err := coordinator.New(serverCfg).Run(ctx); err != nil && ctx.Err() == nil {
+			t.Errorf("coordinator failed: %v", err)
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	aBT := &bluetooth.Fake{FailConnects: 1}
+	bBT := &bluetooth.Fake{}
+	a := Client{Config: testConfig("mac-a", serverCfg.ServerPort), Bluetooth: aBT}
+	b := Client{Config: testConfig("mac-b", serverCfg.ServerPort), Bluetooth: bBT}
+	go func() {
+		if err := b.Run(ctx); err != nil && ctx.Err() == nil {
+			t.Errorf("daemon failed: %v", err)
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	result, err := a.Claim(ctx, "device")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if !result.Connect.OK {
+		t.Fatalf("connect failed: %#v", result.Connect)
+	}
+	if len(bBT.Disconnected) != 2 {
+		t.Fatalf("peer disconnect count = %d, want 2: %#v", len(bBT.Disconnected), bBT.Disconnected)
+	}
+	if len(aBT.Connected) != 2 {
+		t.Fatalf("local connect count = %d, want 2: %#v", len(aBT.Connected), aBT.Connected)
+	}
+}
+
+func TestClaimConnectTimeoutHasMinimum(t *testing.T) {
+	t.Parallel()
+
+	if got := claimConnectTimeout(16 * time.Second); got != minimumClaimConnectTimeout {
+		t.Fatalf("claimConnectTimeout below minimum = %s, want %s", got, minimumClaimConnectTimeout)
+	}
+	if got := claimConnectTimeout(2 * time.Minute); got != 2*time.Minute {
+		t.Fatalf("claimConnectTimeout above minimum = %s, want 2m", got)
+	}
+}
+
 func testConfig(node string, port uint16) config.ClientConfig {
 	cfg := config.DefaultClientConfig()
 	cfg.NodeName = node

@@ -7,16 +7,23 @@ import (
 )
 
 type Fake struct {
-	mu             sync.Mutex
-	Connected      []string
-	Disconnected   []string
-	FailDisconnect bool
+	mu              sync.Mutex
+	Connected       []string
+	ConnectTimeouts []time.Duration
+	Disconnected    []string
+	FailConnects    int
+	FailDisconnect  bool
 }
 
-func (f *Fake) Connect(_ context.Context, address string, _ time.Duration) Result {
+func (f *Fake) Connect(_ context.Context, address string, timeout time.Duration) Result {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Connected = append(f.Connected, address)
+	f.ConnectTimeouts = append(f.ConnectTimeouts, timeout)
+	if f.FailConnects > 0 {
+		f.FailConnects--
+		return Result{OK: false, Error: "connect failed"}
+	}
 	return Result{OK: true}
 }
 

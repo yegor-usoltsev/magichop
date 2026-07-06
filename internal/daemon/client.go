@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	heartbeatInterval = time.Minute
-	reconnectDelay    = time.Second
+	heartbeatInterval          = time.Minute
+	minimumClaimConnectTimeout = time.Minute
+	reconnectDelay             = time.Second
+	singleClaimConnectTimeout  = 20 * time.Second
 )
 
 type Client struct {
@@ -87,6 +89,28 @@ func (c Client) Claim(ctx context.Context, deviceRef string) (ClaimResult, error
 	}
 	defer nc.Close()
 
+	overallDeadline := time.Now().Add(claimConnectTimeout(c.Config.ConnectTimeout.Duration))
+	var last ClaimResult
+	for time.Now().Before(overallDeadline) {
+		result, err := c.claimRound(ctx, nc, address, overallDeadline)
+		if err != nil {
+			return ClaimResult{}, err
+		}
+		last = result
+		if result.Connect.OK {
+			return result, nil
+		}
+		if ctx.Err() != nil {
+			return ClaimResult{}, fmt.Errorf("claim canceled: %w", ctx.Err())
+		}
+	}
+	if last.CommandID != "" {
+		return last, nil
+	}
+	return ClaimResult{}, fmt.Errorf("claim canceled: %w", context.DeadlineExceeded)
+}
+
+func (c Client) claimRound(ctx context.Context, nc *nats.Conn, address string, overallDeadline time.Time) (ClaimResult, error) {
 	commandID, err := randomID()
 	if err != nil {
 		return ClaimResult{}, err
@@ -116,17 +140,21 @@ func (c Client) Claim(ctx context.Context, deviceRef string) (ClaimResult, error
 		return ClaimResult{}, fmt.Errorf("flush ack subscription: %w", err)
 	}
 
+	claimTimeout := minDuration(c.Config.ClaimTimeout.Duration, time.Until(overallDeadline))
+	if claimTimeout <= 0 {
+		return ClaimResult{}, fmt.Errorf("claim canceled: %w", context.DeadlineExceeded)
+	}
 	claim := protocol.ClaimMessage{
 		ID:            commandID,
 		FromNode:      c.Config.NodeName,
 		DeviceAddress: address,
-		Deadline:      time.Now().UTC().Add(c.Config.ClaimTimeout.Duration),
+		Deadline:      time.Now().UTC().Add(claimTimeout),
 	}
 	raw, err := json.Marshal(claim)
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("marshal claim: %w", err)
 	}
-	msg, err := nc.Request(protocol.SubjectCommandsClaim, raw, requestTimeout(c.Config.ClaimTimeout.Duration))
+	msg, err := nc.Request(protocol.SubjectCommandsClaim, raw, requestTimeout(claimTimeout))
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("request claim: %w", err)
 	}
@@ -135,7 +163,7 @@ func (c Client) Claim(ctx context.Context, deviceRef string) (ClaimResult, error
 		return ClaimResult{}, fmt.Errorf("decode claim response: %w", err)
 	}
 
-	timer := time.NewTimer(c.Config.ClaimTimeout.Duration)
+	timer := time.NewTimer(claimTimeout)
 	defer timer.Stop()
 	expected := response.ExpectedAcks
 	acks := make([]protocol.AckMessage, 0, expected)
@@ -145,7 +173,7 @@ func (c Client) Claim(ctx context.Context, deviceRef string) (ClaimResult, error
 		case <-ctx.Done():
 			return ClaimResult{}, fmt.Errorf("claim canceled: %w", ctx.Err())
 		case <-timer.C:
-			result := c.Bluetooth.Connect(ctx, address, c.Config.ConnectTimeout.Duration)
+			result := c.Bluetooth.Connect(ctx, address, localConnectAttemptTimeout(overallDeadline))
 			return ClaimResult{CommandID: commandID, Acks: sortedAcks(acks), Connect: result}, nil
 		case ack := <-ackCh:
 			if ack.Node == c.Config.NodeName || seen[ack.Node] {
@@ -155,7 +183,7 @@ func (c Client) Claim(ctx context.Context, deviceRef string) (ClaimResult, error
 			acks = append(acks, ack)
 		}
 	}
-	result := c.Bluetooth.Connect(ctx, address, c.Config.ConnectTimeout.Duration)
+	result := c.Bluetooth.Connect(ctx, address, localConnectAttemptTimeout(overallDeadline))
 	return ClaimResult{CommandID: commandID, Acks: sortedAcks(acks), Connect: result}, nil
 }
 
@@ -261,6 +289,24 @@ func requestTimeout(claimTimeout time.Duration) time.Duration {
 		return claimTimeout
 	}
 	return time.Second
+}
+
+func claimConnectTimeout(configured time.Duration) time.Duration {
+	if configured < minimumClaimConnectTimeout {
+		return minimumClaimConnectTimeout
+	}
+	return configured
+}
+
+func localConnectAttemptTimeout(deadline time.Time) time.Duration {
+	return minDuration(singleClaimConnectTimeout, time.Until(deadline))
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func sleep(ctx context.Context, delay time.Duration) error {

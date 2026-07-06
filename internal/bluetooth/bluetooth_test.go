@@ -154,6 +154,66 @@ exit 64
 	}
 }
 
+func TestBlueutilConnectRetriesPairFailures(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "log")
+	pairMarkerPath := filepath.Join(dir, "pair-marker")
+	connectMarkerPath := filepath.Join(dir, "connect-marker")
+	scriptPath := filepath.Join(dir, "blueutil")
+	script := `#!/bin/sh
+echo "$1 $2" >> "$MAGICHOP_TEST_LOG"
+case "$1" in
+  --is-connected)
+    if [ -f "$MAGICHOP_TEST_CONNECT_MARKER" ]; then
+      echo 1
+    else
+      echo 0
+    fi
+    exit 0
+    ;;
+  --unpair)
+    exit 0
+    ;;
+  --pair)
+    if [ ! -f "$MAGICHOP_TEST_PAIR_MARKER" ]; then
+      touch "$MAGICHOP_TEST_PAIR_MARKER"
+      echo "page timeout" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  --connect)
+    touch "$MAGICHOP_TEST_CONNECT_MARKER"
+    exit 0
+    ;;
+esac
+exit 64
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	t.Setenv("MAGICHOP_TEST_LOG", logPath)
+	t.Setenv("MAGICHOP_TEST_PAIR_MARKER", pairMarkerPath)
+	t.Setenv("MAGICHOP_TEST_CONNECT_MARKER", connectMarkerPath)
+
+	result := Blueutil{Path: scriptPath}.Connect(t.Context(), "aa-bb-cc-dd-ee-ff", 5*time.Second)
+	if !result.OK {
+		t.Fatalf("Connect failed: %#v", result)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	want := "--is-connected aa-bb-cc-dd-ee-ff\n--unpair aa-bb-cc-dd-ee-ff\n--pair aa-bb-cc-dd-ee-ff\n--unpair aa-bb-cc-dd-ee-ff\n--pair aa-bb-cc-dd-ee-ff\n--connect aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
+	if string(raw) != want {
+		t.Fatalf("operations = %q, want %q", raw, want)
+	}
+}
+
 func TestBlueutilDisconnectUnpairs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
@@ -165,7 +225,7 @@ func TestBlueutilDisconnectUnpairs(t *testing.T) {
 	script := `#!/bin/sh
 echo "$1 $2" >> "$MAGICHOP_TEST_LOG"
 case "$1" in
-  --disconnect|--unpair)
+  --unpair)
     exit 0
     ;;
   --is-connected)
@@ -188,7 +248,7 @@ exit 64
 	if err != nil {
 		t.Fatalf("read log: %v", err)
 	}
-	want := "--disconnect aa-bb-cc-dd-ee-ff\n--unpair aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
+	want := "--unpair aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
 	if string(raw) != want {
 		t.Fatalf("operations = %q, want %q", raw, want)
 	}
@@ -206,7 +266,7 @@ func TestBlueutilDisconnectWaitsUntilDisconnected(t *testing.T) {
 	script := `#!/bin/sh
 echo "$1 $2" >> "$MAGICHOP_TEST_LOG"
 case "$1" in
-  --disconnect|--unpair)
+  --unpair)
     exit 0
     ;;
   --is-connected)
@@ -235,7 +295,7 @@ exit 64
 	if err != nil {
 		t.Fatalf("read log: %v", err)
 	}
-	want := "--disconnect aa-bb-cc-dd-ee-ff\n--unpair aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
+	want := "--unpair aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n--is-connected aa-bb-cc-dd-ee-ff\n"
 	if string(raw) != want {
 		t.Fatalf("operations = %q, want %q", raw, want)
 	}

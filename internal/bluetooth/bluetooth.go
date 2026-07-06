@@ -10,10 +10,13 @@ import (
 )
 
 const (
-	connectAttemptTimeout = 3 * time.Second
-	connectVerifyTimeout  = 1500 * time.Millisecond
+	attachRetryDelay      = time.Second
+	connectAttemptTimeout = 20 * time.Second
+	connectVerifyTimeout  = 2 * time.Second
 	connectRetryDelay     = 300 * time.Millisecond
-	pairSettleDelay       = 500 * time.Millisecond
+	pairAttemptTimeout    = 20 * time.Second
+	pairSettleDelay       = time.Second
+	releaseAttemptTimeout = 10 * time.Second
 	stateCheckTimeout     = 750 * time.Millisecond
 )
 
@@ -61,35 +64,20 @@ func (b Blueutil) Connect(ctx context.Context, address string, timeout time.Dura
 	if ctx.Err() != nil {
 		return Result{Error: ctx.Err().Error()}
 	}
-	_ = b.run(ctx, Args("unpair", address), minDuration(2*time.Second, time.Until(deadline)))
-	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
-		return Result{Error: err.Error()}
-	}
-	result = b.run(ctx, Args("pair", address), minDuration(5*time.Second, time.Until(deadline)))
-	if !result.OK {
-		return result
-	}
-	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
-		return Result{Error: err.Error()}
-	}
-	return b.connectPaired(ctx, address, deadline)
+	return b.attach(ctx, address, deadline)
 }
 
 func (b Blueutil) Disconnect(ctx context.Context, address string, timeout time.Duration) Result {
 	deadline := time.Now().Add(timeout)
-	disconnect := b.run(ctx, Args("disconnect", address), minDuration(2*time.Second, time.Until(deadline)))
-	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
-		return Result{Error: err.Error()}
-	}
-	unpair := b.run(ctx, Args("unpair", address), minDuration(2*time.Second, time.Until(deadline)))
-	if unpair.OK || disconnect.OK {
-		result, ok := b.waitForConnectionState(ctx, address, false, deadline)
-		if ok {
-			return result
-		}
+	unpair := b.run(ctx, Args("unpair", address), minDuration(releaseAttemptTimeout, time.Until(deadline)))
+	result, ok := b.waitForConnectionState(ctx, address, false, deadline)
+	if ok {
 		return result
 	}
-	return Result{ReturnCode: unpair.ReturnCode, Stdout: unpair.Stdout, Stderr: unpair.Stderr, Error: disconnect.Message() + "; " + unpair.Message()}
+	if unpair.OK {
+		return result
+	}
+	return unpair
 }
 
 func (b Blueutil) IsConnected(ctx context.Context, address string, timeout time.Duration) (bool, Result) {
@@ -140,6 +128,44 @@ func Args(action, address string) []string {
 		return []string{"--unpair", address}
 	default:
 		return []string{"--" + action, address}
+	}
+}
+
+func (b Blueutil) attach(ctx context.Context, address string, deadline time.Time) Result {
+	var last Result
+	haveLast := false
+	for {
+		if time.Until(deadline) <= 0 {
+			if haveLast {
+				return last
+			}
+			return Result{Error: context.DeadlineExceeded.Error()}
+		}
+		_ = b.run(ctx, Args("unpair", address), minDuration(releaseAttemptTimeout, time.Until(deadline)))
+		if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+			if haveLast {
+				return last
+			}
+			return Result{Error: err.Error()}
+		}
+		last = b.run(ctx, Args("pair", address), minDuration(pairAttemptTimeout, time.Until(deadline)))
+		haveLast = true
+		if last.OK {
+			if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+				return Result{Error: err.Error()}
+			}
+			last = b.connectPaired(ctx, address, deadline)
+			if last.OK {
+				return last
+			}
+		}
+		if ctx.Err() != nil {
+			last.Error = ctx.Err().Error()
+			return last
+		}
+		if err := sleepUntil(ctx, attachRetryDelay, deadline); err != nil {
+			return last
+		}
 	}
 }
 
