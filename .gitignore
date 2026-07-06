@@ -1,0 +1,22 @@
+# Runtime files
+/data/
+*.log
+coverage.txt
+dist/
+magichop
+com.magichop.agent.plist
+magichop-claim.sh
+
+# Python
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# macOS
+.DS_Store
+*.icloud
+
+# JetBrains
+.idea/*
+!.idea/codeStyles
+!.idea/runConfigurations

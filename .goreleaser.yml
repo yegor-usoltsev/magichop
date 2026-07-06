@@ -1,0 +1,70 @@
+---
+version: 2
+
+project_name: magichop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: magichop
+    env:
+      - CGO_ENABLED=0
+    targets:
+      - go_first_class
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/yegor-usoltsev/MagicHop/internal/runtime.Version={{ .Version }}
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+
+archives:
+  - format_overrides:
+      - goos: windows
+        formats: zip
+
+checksum:
+  name_template: checksums.sha256.txt
+  algorithm: sha256
+
+report_sizes: true
+
+dockers_v2:
+  - id: magichop-image
+    dockerfile: Dockerfile
+    ids:
+      - magichop
+    images:
+      - yusoltsev/magichop
+      - ghcr.io/yegor-usoltsev/magichop
+    tags:
+      - "v{{ .Version }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - "v{{ .Major }}"
+      - "latest"
+    labels:
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.description: "Coordinate Bluetooth device claims between Macs"
+      org.opencontainers.image.name: "{{ .ProjectName }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+release:
+  github:
+    owner: yegor-usoltsev
+    name: MagicHop
+  name_template: "v{{ .Version }}"
+  footer: |
+    ## Docker images
+    - [`yusoltsev/magichop:{{ .Version }}`](https://hub.docker.com/r/yusoltsev/magichop/tags?name={{ .Version }})
+    - [`ghcr.io/yegor-usoltsev/magichop:{{ .Version }}`](https://github.com/yegor-usoltsev/MagicHop/pkgs/container/magichop)
