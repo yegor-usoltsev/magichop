@@ -130,6 +130,7 @@ magichop config init
 magichop install mac
 magichop install raycast --dir <dir>
 magichop uninstall mac
+magichop self-upgrade
 ```
 
 ## Versioning

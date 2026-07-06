@@ -18,6 +18,7 @@ import (
 	"github.com/yegor-usoltsev/MagicHop/internal/install"
 	"github.com/yegor-usoltsev/MagicHop/internal/protocol"
 	appruntime "github.com/yegor-usoltsev/MagicHop/internal/runtime"
+	"github.com/yegor-usoltsev/MagicHop/internal/upgrade"
 )
 
 func Run(args []string) int {
@@ -44,6 +45,8 @@ func Run(args []string) int {
 		return runInstall(args[1:])
 	case "uninstall":
 		return runUninstall(args[1:])
+	case "self-upgrade":
+		return runSelfUpgrade(ctx)
 	case "version":
 		fmt.Println(appruntime.Version) //nolint:forbidigo // CLI output
 		return 0
@@ -281,6 +284,28 @@ func runUninstall(args []string) int {
 	return 0
 }
 
+func runSelfUpgrade(ctx context.Context) int {
+	path, err := executablePath()
+	if err != nil {
+		slog.Error("failed to resolve executable path", "err", err)
+		return 1
+	}
+	result, err := upgrade.Run(ctx, upgrade.Options{
+		CurrentVersion: appruntime.Version,
+		ExecutablePath: path,
+	})
+	if err != nil {
+		slog.Error("self-upgrade failed", "err", err)
+		return 1
+	}
+	if !result.Updated {
+		fmt.Printf("Already up to date: %s\n", result.CurrentVersion) //nolint:forbidigo // CLI output
+		return 0
+	}
+	fmt.Printf("Updated %s -> %s\n", result.CurrentVersion, result.LatestVersion) //nolint:forbidigo // CLI output
+	return 0
+}
+
 func clientDeps(path string) (config.ClientConfig, bluetooth.Backend, error) {
 	cfgPath, err := configPath(path)
 	if err != nil {
@@ -374,4 +399,5 @@ func usage() {
 	fmt.Println(`  install mac`)                       //nolint:forbidigo // CLI output
 	fmt.Println(`  install raycast --dir dir`)         //nolint:forbidigo // CLI output
 	fmt.Println(`  uninstall mac [--purge-config]`)    //nolint:forbidigo // CLI output
+	fmt.Println(`  self-upgrade`)                      //nolint:forbidigo // CLI output
 }
