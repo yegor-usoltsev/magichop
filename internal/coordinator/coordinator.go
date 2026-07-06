@@ -31,6 +31,8 @@ func New(cfg config.ServerConfig) *Coordinator {
 }
 
 func (c *Coordinator) Run(ctx context.Context) error {
+	addr := config.CoordinatorAddress(c.cfg.ServerHost, c.cfg.ServerPort)
+	slog.Info("starting coordinator", "addr", addr)
 	opts := &server.Options{
 		Host:          c.cfg.ServerHost,
 		Port:          int(c.cfg.ServerPort),
@@ -44,9 +46,12 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	c.srv = srv
 	go srv.Start()
 	if !srv.ReadyForConnections(10 * time.Second) {
-		return fmt.Errorf("nats server not ready on %s", config.CoordinatorAddress(c.cfg.ServerHost, c.cfg.ServerPort))
+		return fmt.Errorf("nats server not ready on %s", addr)
 	}
-	defer srv.Shutdown()
+	defer func() {
+		srv.Shutdown()
+		slog.Info("coordinator stopped", "addr", addr)
+	}()
 
 	nc, err := nats.Connect(config.LocalhostNATSURL(c.cfg.ServerPort), nats.Token(c.cfg.AuthToken))
 	if err != nil {
@@ -56,7 +61,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	if err := c.subscribe(nc); err != nil {
 		return err
 	}
-	slog.Info("coordinator started", "addr", config.CoordinatorAddress(c.cfg.ServerHost, c.cfg.ServerPort))
+	slog.Info("coordinator started", "addr", addr)
 	<-ctx.Done()
 	return nil
 }
@@ -83,16 +88,23 @@ func (c *Coordinator) subscribe(nc *nats.Conn) error {
 func (c *Coordinator) handleNode(msg *nats.Msg) {
 	var node protocol.NodeMessage
 	if err := json.Unmarshal(msg.Data, &node); err != nil {
-		slog.Warn("invalid node message", "err", err)
+		slog.Warn("invalid node message", "subject", msg.Subject, "err", err)
 		return
 	}
 	if err := node.Validate(); err != nil {
-		slog.Warn("rejected node message", "err", err)
+		slog.Warn("rejected node message", "subject", msg.Subject, "node", node.Node, "err", err)
 		return
 	}
+	seenAt := time.Now().UTC()
 	c.mu.Lock()
-	c.nodes[node.Node] = protocol.NodeStatus{Node: node.Node, Host: node.Host, SeenAt: time.Now().UTC()}
+	_, known := c.nodes[node.Node]
+	c.nodes[node.Node] = protocol.NodeStatus{Node: node.Node, Host: node.Host, SeenAt: seenAt}
 	c.mu.Unlock()
+	if known {
+		slog.Info("node heartbeat", "node", node.Node, "host", node.Host, "seen_at", seenAt)
+		return
+	}
+	slog.Info("node registered", "node", node.Node, "host", node.Host, "seen_at", seenAt)
 }
 
 func (c *Coordinator) handleClaim(nc *nats.Conn) nats.MsgHandler {
@@ -103,9 +115,18 @@ func (c *Coordinator) handleClaim(nc *nats.Conn) nats.MsgHandler {
 			return
 		}
 		if err := claim.Validate(time.Now().UTC()); err != nil {
-			slog.Warn("rejected claim message", "err", err)
+			slog.Warn("rejected claim message", "id", claim.ID, "from_node", claim.FromNode, "err", err)
 			return
 		}
+		expectedAcks := c.commandSubscribers(claim.FromNode)
+		slog.Info(
+			"claim received",
+			"id", claim.ID,
+			"from_node", claim.FromNode,
+			"device", protocol.MaskBluetoothAddress(claim.DeviceAddress),
+			"expected_acks", expectedAcks,
+			"deadline", claim.Deadline,
+		)
 		cmd := protocol.CommandMessage{
 			ID:            claim.ID,
 			Type:          protocol.CommandTypeDisconnectDevice,
@@ -120,23 +141,27 @@ func (c *Coordinator) handleClaim(nc *nats.Conn) nats.MsgHandler {
 		}
 		if err := nc.Publish(protocol.SubjectCommandsBroadcast, raw); err != nil {
 			slog.Error("failed to broadcast command", "err", err)
+			return
 		}
+		slog.Info("claim broadcasted", "id", claim.ID, "from_node", claim.FromNode, "expected_acks", expectedAcks)
 		if msg.Reply != "" {
-			c.replyClaim(nc, msg.Reply, claim.FromNode)
+			c.replyClaim(nc, msg.Reply, claim.ID, expectedAcks)
 		}
 	}
 }
 
-func (c *Coordinator) replyClaim(nc *nats.Conn, reply, fromNode string) {
-	response := protocol.ClaimResponse{ExpectedAcks: c.commandSubscribers(fromNode)}
+func (c *Coordinator) replyClaim(nc *nats.Conn, reply, claimID string, expectedAcks int) {
+	response := protocol.ClaimResponse{ExpectedAcks: expectedAcks}
 	raw, err := json.Marshal(response)
 	if err != nil {
-		slog.Error("failed to marshal claim response", "err", err)
+		slog.Error("failed to marshal claim response", "id", claimID, "err", err)
 		return
 	}
 	if err := nc.Publish(reply, raw); err != nil {
-		slog.Error("failed to publish claim response", "err", err)
+		slog.Error("failed to publish claim response", "id", claimID, "err", err)
+		return
 	}
+	slog.Info("claim response sent", "id", claimID, "expected_acks", expectedAcks)
 }
 
 func (c *Coordinator) commandSubscribers(fromNode string) int {
@@ -167,7 +192,9 @@ func (c *Coordinator) handleStatus(nc *nats.Conn) nats.MsgHandler {
 		}
 		if err := nc.Publish(msg.Reply, raw); err != nil {
 			slog.Error("failed to publish status", "err", err)
+			return
 		}
+		slog.Info("status response sent", "nodes", len(status.Nodes))
 	}
 }
 
@@ -179,6 +206,7 @@ func (c *Coordinator) recentNodes(now time.Time) []protocol.NodeStatus {
 	for name, node := range c.nodes {
 		if now.Sub(node.SeenAt) > nodeTTL {
 			delete(c.nodes, name)
+			slog.Info("node expired", "node", name, "last_seen", node.SeenAt)
 			continue
 		}
 		nodes = append(nodes, node)

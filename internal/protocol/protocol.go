@@ -32,6 +32,14 @@ func NormalizeBluetoothAddress(value string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), ":", "-"))
 }
 
+func MaskBluetoothAddress(value string) string {
+	normalized := NormalizeBluetoothAddress(value)
+	if !IsBluetoothAddress(normalized) {
+		return ""
+	}
+	return normalized[:2] + "-**-**-**-**-" + normalized[len(normalized)-2:]
+}
+
 type NodeMessage struct {
 	Node     string    `json:"node"`
 	Host     string    `json:"host"`

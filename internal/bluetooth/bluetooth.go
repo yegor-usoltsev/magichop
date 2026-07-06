@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+const (
+	connectAttemptTimeout = 3 * time.Second
+	connectRetryDelay     = 300 * time.Millisecond
+	pairSettleDelay       = 500 * time.Millisecond
+)
+
 type Backend interface {
 	Connect(ctx context.Context, address string, timeout time.Duration) Result
 	Disconnect(ctx context.Context, address string, timeout time.Duration) Result
@@ -45,11 +51,39 @@ func NewBlueutil() (*Blueutil, error) {
 }
 
 func (b Blueutil) Connect(ctx context.Context, address string, timeout time.Duration) Result {
-	return b.run(ctx, Args("connect", address), timeout)
+	deadline := time.Now().Add(timeout)
+	connected, result := b.IsConnected(ctx, address, minDuration(2*time.Second, time.Until(deadline)))
+	if connected {
+		return result
+	}
+	if ctx.Err() != nil {
+		return Result{Error: ctx.Err().Error()}
+	}
+	_ = b.run(ctx, Args("unpair", address), minDuration(2*time.Second, time.Until(deadline)))
+	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+		return Result{Error: err.Error()}
+	}
+	result = b.run(ctx, Args("pair", address), minDuration(5*time.Second, time.Until(deadline)))
+	if !result.OK {
+		return result
+	}
+	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+		return Result{Error: err.Error()}
+	}
+	return b.connectPaired(ctx, address, deadline)
 }
 
 func (b Blueutil) Disconnect(ctx context.Context, address string, timeout time.Duration) Result {
-	return b.run(ctx, Args("disconnect", address), timeout)
+	deadline := time.Now().Add(timeout)
+	disconnect := b.run(ctx, Args("disconnect", address), minDuration(2*time.Second, time.Until(deadline)))
+	if err := sleepUntil(ctx, pairSettleDelay, deadline); err != nil {
+		return Result{Error: err.Error()}
+	}
+	unpair := b.run(ctx, Args("unpair", address), minDuration(2*time.Second, time.Until(deadline)))
+	if unpair.OK || disconnect.OK {
+		return unpair
+	}
+	return Result{ReturnCode: unpair.ReturnCode, Stdout: unpair.Stdout, Stderr: unpair.Stderr, Error: disconnect.Message() + "; " + unpair.Message()}
 }
 
 func (b Blueutil) IsConnected(ctx context.Context, address string, timeout time.Duration) (bool, Result) {
@@ -58,6 +92,9 @@ func (b Blueutil) IsConnected(ctx context.Context, address string, timeout time.
 }
 
 func (b Blueutil) run(ctx context.Context, args []string, timeout time.Duration) Result {
+	if timeout <= 0 {
+		return Result{Error: context.DeadlineExceeded.Error()}
+	}
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, b.Path, args...) //nolint:gosec // fixed executable with explicit blueutil arguments
@@ -91,7 +128,57 @@ func Args(action, address string) []string {
 		return []string{"--disconnect", address}
 	case "is-connected":
 		return []string{"--is-connected", address}
+	case "pair":
+		return []string{"--pair", address}
+	case "unpair":
+		return []string{"--unpair", address}
 	default:
 		return []string{"--" + action, address}
 	}
+}
+
+func (b Blueutil) connectPaired(ctx context.Context, address string, deadline time.Time) Result {
+	var last Result
+	for {
+		attemptTimeout := minDuration(connectAttemptTimeout, time.Until(deadline))
+		if attemptTimeout <= 0 {
+			if last.Message() != "" {
+				return last
+			}
+			return Result{Error: context.DeadlineExceeded.Error()}
+		}
+		last = b.run(ctx, Args("connect", address), attemptTimeout)
+		if last.OK {
+			return last
+		}
+		if ctx.Err() != nil {
+			last.Error = ctx.Err().Error()
+			return last
+		}
+		if err := sleepUntil(ctx, connectRetryDelay, deadline); err != nil {
+			return last
+		}
+	}
+}
+
+func sleepUntil(ctx context.Context, delay time.Duration, deadline time.Time) error {
+	sleep := minDuration(delay, time.Until(deadline))
+	if sleep <= 0 {
+		return context.DeadlineExceeded
+	}
+	timer := time.NewTimer(sleep)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("context done: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }

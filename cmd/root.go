@@ -103,10 +103,10 @@ func runClaim(ctx context.Context, args []string) int {
 	}
 	for _, ack := range result.Acks {
 		if ack.OK {
-			fmt.Printf("%s: disconnected\n", ack.Node) //nolint:forbidigo // CLI output
+			fmt.Printf("%s: released\n", ack.Node) //nolint:forbidigo // CLI output
 			continue
 		}
-		fmt.Printf("%s: disconnect failed: %s\n", ack.Node, ack.Error) //nolint:forbidigo // CLI output
+		fmt.Printf("%s: release failed: %s\n", ack.Node, ack.Error) //nolint:forbidigo // CLI output
 	}
 	if result.Connect.OK {
 		fmt.Println("local connect: ok") //nolint:forbidigo // CLI output

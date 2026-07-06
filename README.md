@@ -7,7 +7,9 @@
 [![Docker Image (ghcr.io)](https://img.shields.io/docker/v/yusoltsev/magichop?label=ghcr.io&sort=semver)](https://github.com/yegor-usoltsev/magichop/pkgs/container/magichop)
 [![Docker Image Size](https://img.shields.io/docker/image-size/yusoltsev/magichop?sort=semver&arch=amd64)](https://hub.docker.com/r/yusoltsev/magichop/tags)
 
-MagicHop lets several Macs share a Bluetooth device without talking to each other directly. A coordinator runs NATS, each Mac runs a small daemon, and `magichop claim` asks other Macs to disconnect before connecting locally.
+MagicHop lets several Macs share a Bluetooth device without talking to each other directly. A coordinator runs NATS, each Mac runs a small daemon, and `magichop claim` asks other Macs to release the device before acquiring it locally.
+
+Releasing means disconnecting and unpairing. Acquiring means pairing and then connecting.
 
 ## Usage
 
@@ -22,6 +24,12 @@ docker run -d \
   -e MAGICHOP_AUTH_TOKEN=<shared-token> \
   -p 4222:4222 \
   ghcr.io/yegor-usoltsev/magichop:latest
+```
+
+Tail coordinator logs:
+
+```bash
+docker logs -f magichop
 ```
 
 ### Macs
@@ -104,7 +112,7 @@ Mac clients use `MAGICHOP_CONFIG` when it is set. Otherwise they read `~/.config
   },
   "default_device": "device",
   "claim_timeout": "4s",
-  "connect_timeout": "10s",
+  "connect_timeout": "14s",
   "disconnect_timeout": "4s"
 }
 ```

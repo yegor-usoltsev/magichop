@@ -70,6 +70,12 @@ func TestBluetoothAddressHelpers(t *testing.T) {
 	if got := NormalizeBluetoothAddress("AA:BB:CC:DD:EE:FF"); got != "aa-bb-cc-dd-ee-ff" {
 		t.Fatalf("unexpected normalized address: %s", got)
 	}
+	if got := MaskBluetoothAddress("AA:BB:CC:DD:EE:FF"); got != "aa-**-**-**-**-ff" {
+		t.Fatalf("unexpected masked address: %s", got)
+	}
+	if got := MaskBluetoothAddress("nope"); got != "" {
+		t.Fatalf("unexpected masked invalid address: %s", got)
+	}
 }
 
 func TestClaimValidation(t *testing.T) {
