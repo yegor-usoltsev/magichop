@@ -112,7 +112,7 @@ Mac clients use `MAGICHOP_CONFIG` when it is set. Otherwise they read `~/.config
   },
   "default_device": "device",
   "claim_timeout": "6s",
-  "connect_timeout": "60s",
+  "connect_timeout": "15s",
   "disconnect_timeout": "6s"
 }
 ```

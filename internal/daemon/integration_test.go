@@ -142,7 +142,7 @@ func TestClaimRetriesReleaseWhenLocalConnectFails(t *testing.T) {
 func TestClaimConnectTimeoutHasMinimum(t *testing.T) {
 	t.Parallel()
 
-	if got := claimConnectTimeout(16 * time.Second); got != minimumClaimConnectTimeout {
+	if got := claimConnectTimeout(5 * time.Second); got != minimumClaimConnectTimeout {
 		t.Fatalf("claimConnectTimeout below minimum = %s, want %s", got, minimumClaimConnectTimeout)
 	}
 	if got := claimConnectTimeout(2 * time.Minute); got != 2*time.Minute {

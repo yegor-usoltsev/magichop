@@ -18,9 +18,9 @@ import (
 
 const (
 	heartbeatInterval          = time.Minute
-	minimumClaimConnectTimeout = time.Minute
+	minimumClaimConnectTimeout = 15 * time.Second
 	reconnectDelay             = time.Second
-	singleClaimConnectTimeout  = 20 * time.Second
+	singleClaimConnectTimeout  = 8 * time.Second
 )
 
 type Client struct {

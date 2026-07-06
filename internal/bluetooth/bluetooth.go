@@ -11,12 +11,12 @@ import (
 
 const (
 	attachRetryDelay      = time.Second
-	connectAttemptTimeout = 20 * time.Second
-	connectVerifyTimeout  = 2 * time.Second
+	connectAttemptTimeout = 5 * time.Second
+	connectVerifyTimeout  = time.Second
 	connectRetryDelay     = 300 * time.Millisecond
-	pairAttemptTimeout    = 20 * time.Second
-	pairSettleDelay       = time.Second
-	releaseAttemptTimeout = 10 * time.Second
+	pairAttemptTimeout    = 8 * time.Second
+	pairSettleDelay       = 500 * time.Millisecond
+	releaseAttemptTimeout = 3 * time.Second
 	stateCheckTimeout     = 750 * time.Millisecond
 )
 

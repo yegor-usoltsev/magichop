@@ -80,7 +80,7 @@ func DefaultClientConfig() ClientConfig {
 		Devices:           map[string]string{},
 		DefaultDevice:     "",
 		ClaimTimeout:      Duration{Duration: 6 * time.Second},
-		ConnectTimeout:    Duration{Duration: 60 * time.Second},
+		ConnectTimeout:    Duration{Duration: 15 * time.Second},
 		DisconnectTimeout: Duration{Duration: 6 * time.Second},
 	}
 }
