@@ -1,9 +1,11 @@
 # MagicHop
 
-[![Build Status](https://github.com/yegor-usoltsev/MagicHop/actions/workflows/ci.yml/badge.svg)](https://github.com/yegor-usoltsev/MagicHop/actions)
-[![GitHub Release](https://img.shields.io/github/v/release/yegor-usoltsev/MagicHop?sort=semver)](https://github.com/yegor-usoltsev/MagicHop/releases)
+[![Build Status](https://github.com/yegor-usoltsev/magichop/actions/workflows/ci.yml/badge.svg)](https://github.com/yegor-usoltsev/magichop/actions)
+[![Codecov](https://codecov.io/github/yegor-usoltsev/magichop/graph/badge.svg?token=5I7K9PUI0P)](https://codecov.io/github/yegor-usoltsev/magichop)
+[![GitHub Release](https://img.shields.io/github/v/release/yegor-usoltsev/magichop?sort=semver)](https://github.com/yegor-usoltsev/magichop/releases)
 [![Docker Image (docker.io)](https://img.shields.io/docker/v/yusoltsev/magichop?label=docker.io&sort=semver)](https://hub.docker.com/r/yusoltsev/magichop)
-[![Docker Image (ghcr.io)](https://img.shields.io/docker/v/yusoltsev/magichop?label=ghcr.io&sort=semver)](https://github.com/yegor-usoltsev/MagicHop/pkgs/container/magichop)
+[![Docker Image (ghcr.io)](https://img.shields.io/docker/v/yusoltsev/magichop?label=ghcr.io&sort=semver)](https://github.com/yegor-usoltsev/magichop/pkgs/container/magichop)
+[![Docker Image Size](https://img.shields.io/docker/image-size/yusoltsev/magichop?sort=semver&arch=amd64)](https://hub.docker.com/r/yusoltsev/magichop/tags)
 
 MagicHop lets several Macs share a Bluetooth device without talking to each other directly. A coordinator runs NATS, each Mac runs a small daemon, and `magichop claim` asks other Macs to disconnect before connecting locally.
 
