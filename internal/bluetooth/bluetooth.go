@@ -10,14 +10,14 @@ import (
 )
 
 const (
-	attachRetryDelay      = time.Second
-	connectAttemptTimeout = 5 * time.Second
-	connectVerifyTimeout  = time.Second
-	connectRetryDelay     = 300 * time.Millisecond
-	pairAttemptTimeout    = 8 * time.Second
-	pairSettleDelay       = 500 * time.Millisecond
-	releaseAttemptTimeout = 3 * time.Second
-	stateCheckTimeout     = 750 * time.Millisecond
+	attachRetryDelay      = 500 * time.Millisecond
+	connectAttemptTimeout = 2 * time.Second
+	connectVerifyTimeout  = 500 * time.Millisecond
+	connectRetryDelay     = 200 * time.Millisecond
+	pairAttemptTimeout    = 5 * time.Second
+	pairSettleDelay       = 300 * time.Millisecond
+	releaseAttemptTimeout = time.Second
+	stateCheckTimeout     = 300 * time.Millisecond
 )
 
 type Backend interface {
@@ -60,7 +60,7 @@ func (b Blueutil) Connect(ctx context.Context, address string, timeout time.Dura
 		return Result{Error: context.DeadlineExceeded.Error()}
 	}
 	deadline := time.Now().Add(timeout)
-	connected, result := b.IsConnected(ctx, address, minDuration(2*time.Second, time.Until(deadline)))
+	connected, result := b.isConnectedStable(ctx, address, deadline)
 	if connected {
 		return result
 	}
@@ -89,6 +89,19 @@ func (b Blueutil) Release(ctx context.Context, address string, timeout time.Dura
 func (b Blueutil) IsConnected(ctx context.Context, address string, timeout time.Duration) (bool, Result) {
 	result := b.run(ctx, Args("is-connected", address), timeout)
 	return result.OK && strings.TrimSpace(result.Stdout) == "1", result
+}
+
+func (b Blueutil) isConnectedStable(ctx context.Context, address string, deadline time.Time) (bool, Result) {
+	connected, result := b.IsConnected(ctx, address, minDuration(stateCheckTimeout, time.Until(deadline)))
+	if !connected {
+		return false, result
+	}
+	if err := sleepUntil(ctx, connectVerifyTimeout, deadline); err != nil {
+		result.OK = false
+		result.Error = err.Error()
+		return false, result
+	}
+	return b.IsConnected(ctx, address, minDuration(stateCheckTimeout, time.Until(deadline)))
 }
 
 func (b Blueutil) run(ctx context.Context, args []string, timeout time.Duration) Result {

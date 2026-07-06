@@ -114,9 +114,9 @@ Mac clients use `MAGICHOP_CONFIG` when it is set. Otherwise they read `~/.config
     "trackpad": "aa-bb-cc-dd-ee-02"
   },
   "default_device": "trackpad",
-  "claim_timeout": "6s",
-  "connect_timeout": "15s",
-  "release_timeout": "6s"
+  "claim_timeout": "2s",
+  "connect_timeout": "10s",
+  "release_timeout": "2s"
 }
 ```
 
