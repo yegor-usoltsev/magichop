@@ -320,7 +320,7 @@ func (s *Service) Handle(ctx context.Context, req protocol.LocalRequest) []any {
 		device, address, _ := config.ResolveDevice(s.cfg, req.Device)
 		return []any{protocol.StatusResult{Type: protocol.LocalStatusResult, OK: true, Daemon: "running", Coordinator: "disconnected", Device: displayDevice(device, address), Recent: s.recentFinals()}}
 	case protocol.LocalDoctor:
-		return []any{protocol.DoctorResult{Type: protocol.LocalDoctorResult, OK: true, Checks: []protocol.DoctorCheck{{Name: "config", OK: true}}}}
+		return []any{s.handleDoctor()}
 	case protocol.LocalRelease:
 		return []any{s.handleRelease(ctx, req)}
 	case protocol.LocalClaim:
@@ -513,6 +513,38 @@ func (s *Service) handleRelease(ctx context.Context, req protocol.LocalRequest) 
 		result.Error = protocol.ErrLogUnavailable
 	}
 	return result
+}
+
+func (s *Service) handleDoctor() protocol.DoctorResult {
+	checks := []protocol.DoctorCheck{
+		{Name: "config", OK: s.cfg.CoordinatorURL != "" && s.cfg.AuthToken != ""},
+		{Name: "blueutil", OK: s.preflightBluetooth() == nil},
+		{Name: "daemon_socket", OK: true},
+		{Name: "coordinator", OK: s.coord != nil},
+		{Name: "state", OK: s.store != nil},
+		{Name: "log", OK: pathWritable(LogPath())},
+	}
+	ok := true
+	for i := range checks {
+		if !checks[i].OK {
+			ok = false
+			if checks[i].Err == "" {
+				checks[i].Err = "failed"
+			}
+		}
+	}
+	return protocol.DoctorResult{Type: protocol.LocalDoctorResult, OK: ok, Checks: checks}
+}
+
+func pathWritable(path string) bool {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	return f.Close() == nil
 }
 
 func (s *Service) handlePeerRelease(ctx context.Context, req protocol.Release) protocol.ReleaseReply {

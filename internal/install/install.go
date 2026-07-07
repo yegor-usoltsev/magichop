@@ -3,11 +3,14 @@ package install
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/yegor-usoltsev/magichop/internal/config"
+	"github.com/yegor-usoltsev/magichop/internal/daemon"
 	"github.com/yegor-usoltsev/magichop/internal/state"
 )
 
@@ -15,18 +18,8 @@ func Mac(configPath, binary string) error {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return err
 	}
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		cfg := config.Defaults()
-		cfg.AuthToken = "CHANGE_ME"
-		cfg.DefaultDevice = "trackpad"
-		cfg.Devices = map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}
-		data, err := json.MarshalIndent(cfg, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(configPath, data, 0o600); err != nil {
-			return err
-		}
+	if err := EnsureConfig(configPath); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(state.DefaultPath()), 0o700); err != nil {
 		return err
@@ -39,7 +32,17 @@ func Mac(configPath, binary string) error {
 	if err := os.MkdirAll(filepath.Dir(plist), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(plist, []byte(launchAgent(binary, configPath)), 0o644)
+	if err := os.WriteFile(plist, []byte(launchAgent(binary, configPath)), 0o644); err != nil {
+		return err
+	}
+	if err := exec.Command("launchctl", "load", plist).Run(); err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("unix", daemon.SocketPath(), 5*time.Second)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func Raycast(dir string, cfg config.Config, binary string) error {
@@ -67,7 +70,7 @@ func UninstallMac() error {
 
 func EditConfig(path string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := Mac(path, os.Args[0]); err != nil {
+		if err := EnsureConfig(path); err != nil {
 			return err
 		}
 	}
@@ -80,6 +83,26 @@ func EditConfig(path string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func EnsureConfig(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	cfg := config.Defaults()
+	cfg.AuthToken = "CHANGE_ME"
+	cfg.DefaultDevice = "trackpad"
+	cfg.Devices = map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func launchAgent(binary, configPath string) string {
