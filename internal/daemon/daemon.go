@@ -12,8 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/yegor-usoltsev/magichop/internal/bluetooth"
 	"github.com/yegor-usoltsev/magichop/internal/config"
+	"github.com/yegor-usoltsev/magichop/internal/coordinator"
 	"github.com/yegor-usoltsev/magichop/internal/protocol"
 	"github.com/yegor-usoltsev/magichop/internal/state"
 )
@@ -26,6 +29,7 @@ type Service struct {
 	cfg    config.Config
 	store  eventStore
 	runner bluetooth.Runner
+	coord  coordinatorClient
 
 	mu     sync.Mutex
 	claims map[string]claimReplay
@@ -39,6 +43,11 @@ type eventStore interface {
 type claimReplay struct {
 	accepted protocol.Accepted
 	final    *protocol.FinalResult
+}
+
+type coordinatorClient interface {
+	Claim(context.Context, protocol.Claim) (protocol.ClaimResult, error)
+	Close()
 }
 
 func SocketPath() string {
@@ -59,7 +68,13 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer store.Close()
+	coord, err := connectCoordinator(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer coord.Close()
 	svc := NewService(cfg, store, bluetooth.ExecRunner{})
+	svc.coord = coord
 	dir := filepath.Dir(SocketPath())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -97,6 +112,124 @@ func NewService(cfg config.Config, store eventStore, runner bluetooth.Runner) *S
 		claims: map[string]claimReplay{},
 		locks:  map[string]chan struct{}{},
 	}
+}
+
+type natsCoordinatorClient struct {
+	nc     *nats.Conn
+	cfg    config.Config
+	stop   chan struct{}
+	done   chan struct{}
+	closed sync.Once
+}
+
+func connectCoordinator(ctx context.Context, cfg config.Config) (*natsCoordinatorClient, error) {
+	nc, err := nats.Connect(cfg.CoordinatorURL)
+	if err != nil {
+		return nil, err
+	}
+	client := &natsCoordinatorClient{nc: nc, cfg: cfg, stop: make(chan struct{}), done: make(chan struct{})}
+	if err := client.register(ctx); err != nil {
+		nc.Close()
+		return nil, err
+	}
+	if err := client.subscribeRelease(); err != nil {
+		nc.Close()
+		return nil, err
+	}
+	go client.heartbeatLoop()
+	return client, nil
+}
+
+func (c *natsCoordinatorClient) register(ctx context.Context) error {
+	req := protocol.Register{Protocol: protocol.Version, Type: protocol.TypeRegister, Node: c.cfg.NodeName, AuthToken: c.cfg.AuthToken, Devices: c.cfg.Devices}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	msg, err := c.nc.RequestWithContext(ctx, coordinator.SubjectRegister, data)
+	if err != nil {
+		return err
+	}
+	var res protocol.RegisterResult
+	if err := json.Unmarshal(msg.Data, &res); err != nil {
+		return err
+	}
+	if res.Status != "ok" {
+		return fmt.Errorf("%s: %s", res.Status, res.Reason)
+	}
+	return nil
+}
+
+func (c *natsCoordinatorClient) subscribeRelease() error {
+	_, err := c.nc.Subscribe(coordinator.SubjectRelease(c.cfg.NodeName), func(msg *nats.Msg) {
+		respondNATSJSON(msg, protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: releaseRequestID(msg.Data), Status: "fail", Reason: protocol.ErrReleaseFailed})
+	})
+	if err != nil {
+		return err
+	}
+	c.nc.Flush()
+	return c.nc.LastError()
+}
+
+func respondNATSJSON(msg *nats.Msg, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	_ = msg.Respond(data)
+}
+
+func releaseRequestID(data []byte) string {
+	var req protocol.Release
+	_ = json.Unmarshal(data, &req)
+	return req.RequestID
+}
+
+func (c *natsCoordinatorClient) heartbeatLoop() {
+	defer close(c.done)
+	ticker := time.NewTicker(coordinator.HeartbeatInterval)
+	defer ticker.Stop()
+	c.publishHeartbeat()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-ticker.C:
+			c.publishHeartbeat()
+		}
+	}
+}
+
+func (c *natsCoordinatorClient) publishHeartbeat() {
+	req := protocol.Heartbeat{Protocol: protocol.Version, Type: protocol.TypeHeartbeat, Node: c.cfg.NodeName, AuthToken: c.cfg.AuthToken}
+	data, err := json.Marshal(req)
+	if err == nil {
+		_ = c.nc.Publish(coordinator.SubjectHeartbeat(c.cfg.NodeName), data)
+	}
+}
+
+func (c *natsCoordinatorClient) Claim(ctx context.Context, req protocol.Claim) (protocol.ClaimResult, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return protocol.ClaimResult{}, err
+	}
+	msg, err := c.nc.RequestWithContext(ctx, coordinator.SubjectClaim(req.Device), data)
+	if err != nil {
+		return protocol.ClaimResult{}, err
+	}
+	var res protocol.ClaimResult
+	if err := json.Unmarshal(msg.Data, &res); err != nil {
+		return protocol.ClaimResult{}, err
+	}
+	return res, nil
+}
+
+func (c *natsCoordinatorClient) Close() {
+	c.closed.Do(func() {
+		close(c.stop)
+		<-c.done
+		c.nc.Close()
+	})
 }
 
 func (s *Service) handleConn(conn net.Conn) {
@@ -158,13 +291,69 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 	}
 	s.rememberAccepted(req.ClientRequestID, accepted)
 
-	start := time.Now()
-	final := protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: requestID, OK: false, Error: protocol.ErrCoordinatorUnavailable, DurationMS: time.Since(start).Milliseconds(), Device: displayDevice(device, address), Address: address}
+	final := s.runClaim(ctx, requestID, displayDevice(device, address), address, req.TimeoutMS)
 	if err := s.append(state.Event{Event: state.EventFinalResult, RequestID: requestID, ClientRequestID: req.ClientRequestID, OK: final.OK, Error: final.Error, DurationMS: final.DurationMS}); err != nil {
 		final.Error = protocol.ErrLogUnavailable
 	}
 	s.rememberFinal(req.ClientRequestID, final)
 	return []any{accepted, final}
+}
+
+func (s *Service) runClaim(ctx context.Context, requestID, device, address string, timeoutMS int64) protocol.FinalResult {
+	start := time.Now()
+	if timeoutMS <= 0 {
+		timeoutMS = s.cfg.Timeouts.WholeClaim.Milliseconds()
+	}
+	deadline := start.Add(time.Duration(timeoutMS) * time.Millisecond)
+	result := protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: requestID, Device: device, Address: address}
+	if s.coord == nil {
+		result.Error = protocol.ErrCoordinatorUnavailable
+		result.DurationMS = time.Since(start).Milliseconds()
+		return result
+	}
+	claimCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	claim := protocol.Claim{Protocol: protocol.Version, Type: protocol.TypeClaim, RequestID: requestID, Requester: s.cfg.NodeName, Device: address, RemainingMS: time.Until(deadline).Milliseconds()}
+	claimResult, err := s.coord.Claim(claimCtx, claim)
+	if err != nil {
+		result.Error = protocol.ErrCoordinatorUnavailable
+		result.DurationMS = time.Since(start).Milliseconds()
+		return result
+	}
+	if claimResult.Status != "proceed" {
+		result.Error = claimResult.Status
+		result.DurationMS = time.Since(start).Milliseconds()
+		return result
+	}
+	if err := sleepClipped(claimCtx, time.Duration(claimResult.ReleaseWaitMS)*time.Millisecond); err != nil {
+		result.Error = protocol.ErrClaimTimeout
+		result.DurationMS = time.Since(start).Milliseconds()
+		return result
+	}
+	err = bluetooth.Acquire(claimCtx, s.runner, address, time.Until(deadline))
+	result.DurationMS = time.Since(start).Milliseconds()
+	if err != nil {
+		result.Error = bluetooth.ErrorCode(err)
+		return result
+	}
+	result.OK = true
+	result.Connected = true
+	result.AcquireSeen = true
+	return result
+}
+
+func sleepClipped(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Service) handleRelease(ctx context.Context, req protocol.LocalRequest) protocol.ReleaseResult {

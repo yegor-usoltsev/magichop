@@ -9,6 +9,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.0
 	github.com/knadh/koanf/v2 v2.3.0
 	github.com/nats-io/nats-server/v2 v2.12.2
+	github.com/nats-io/nats.go v1.47.0
 )
 
 require (
