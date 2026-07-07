@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/go-playground/validator/v10"
 )
 
 const Version = 1
@@ -92,4 +94,13 @@ func MessageType(data []byte) (string, error) {
 		return "", fmt.Errorf("%w: type", errors.New(ErrInvalidRequest))
 	}
 	return envelope.Type, nil
+}
+
+var shapeValidator = validator.New(validator.WithRequiredStructEnabled())
+
+func ValidateShape(v any) error {
+	if err := shapeValidator.Struct(v); err != nil {
+		return fmt.Errorf("%w: %v", errors.New(ErrInvalidRequest), err)
+	}
+	return nil
 }

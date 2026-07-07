@@ -32,6 +32,17 @@ func TestMessageTypeRejectsMissingRequiredEnvelope(t *testing.T) {
 	}
 }
 
+func TestValidateShape(t *testing.T) {
+	valid := Claim{Protocol: Version, Type: TypeClaim, RequestID: "8f72c6125a9d414d9f8f0fb2e5a19c22", Requester: "a", Device: "aa:bb:cc:dd:ee:ff", RemainingMS: 1000}
+	if err := ValidateShape(valid); err != nil {
+		t.Fatalf("valid claim failed: %v", err)
+	}
+	invalid := Claim{Protocol: Version, Type: TypeClaim}
+	if err := ValidateShape(invalid); err == nil {
+		t.Fatal("expected invalid claim shape to fail")
+	}
+}
+
 func TestLocalIPCEncodeDecode(t *testing.T) {
 	var buf bytes.Buffer
 	req := LocalRequest{Type: LocalClaim, ClientRequestID: "abc", Device: "trackpad", TimeoutMS: 11000}
