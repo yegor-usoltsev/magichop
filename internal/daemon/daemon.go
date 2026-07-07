@@ -77,6 +77,9 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	if err := state.TerminalizeOpen(state.DefaultPath(), protocol.ErrDaemonRestarted); err != nil {
+		return err
+	}
 	store, err := state.Open(state.DefaultPath())
 	if err != nil {
 		return err

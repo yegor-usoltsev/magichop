@@ -85,6 +85,51 @@ func RecentFinalResults(path string, limit int) ([]Event, error) {
 	return RecentFinalResultsFromReader(f, limit)
 }
 
+func TerminalizeOpen(path string, reason string) error {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(f)
+	accepted := map[string]Event{}
+	final := map[string]bool{}
+	for scanner.Scan() {
+		var event Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			_ = f.Close()
+			return err
+		}
+		switch event.Event {
+		case EventAccepted:
+			accepted[event.RequestID] = event
+		case EventFinalResult:
+			final[event.RequestID] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	_ = f.Close()
+	store, err := Open(path)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	for requestID, event := range accepted {
+		if final[requestID] {
+			continue
+		}
+		if err := store.Append(Event{Event: EventFinalResult, RequestID: requestID, ClientRequestID: event.ClientRequestID, OK: false, Error: reason}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func RecentFinalResultsFromReader(r io.Reader, limit int) ([]Event, error) {
 	if limit <= 0 {
 		limit = 100
