@@ -34,6 +34,7 @@ type Service struct {
 	mu     sync.Mutex
 	claims map[string]claimReplay
 	locks  map[string]chan struct{}
+	peers  map[string]peerReleaseReplay
 }
 
 type eventStore interface {
@@ -43,6 +44,13 @@ type eventStore interface {
 type claimReplay struct {
 	accepted protocol.Accepted
 	final    *protocol.FinalResult
+}
+
+type peerReleaseReplay struct {
+	requester string
+	device    string
+	reply     protocol.ReleaseReply
+	expires   time.Time
 }
 
 type coordinatorClient interface {
@@ -68,12 +76,12 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer store.Close()
-	coord, err := connectCoordinator(ctx, cfg)
+	svc := NewService(cfg, store, bluetooth.ExecRunner{})
+	coord, err := connectCoordinator(ctx, cfg, svc.handlePeerRelease)
 	if err != nil {
 		return err
 	}
 	defer coord.Close()
-	svc := NewService(cfg, store, bluetooth.ExecRunner{})
 	svc.coord = coord
 	dir := filepath.Dir(SocketPath())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -111,23 +119,25 @@ func NewService(cfg config.Config, store eventStore, runner bluetooth.Runner) *S
 		runner: runner,
 		claims: map[string]claimReplay{},
 		locks:  map[string]chan struct{}{},
+		peers:  map[string]peerReleaseReplay{},
 	}
 }
 
 type natsCoordinatorClient struct {
-	nc     *nats.Conn
-	cfg    config.Config
-	stop   chan struct{}
-	done   chan struct{}
-	closed sync.Once
+	nc             *nats.Conn
+	cfg            config.Config
+	stop           chan struct{}
+	done           chan struct{}
+	closed         sync.Once
+	releaseHandler func(context.Context, protocol.Release) protocol.ReleaseReply
 }
 
-func connectCoordinator(ctx context.Context, cfg config.Config) (*natsCoordinatorClient, error) {
+func connectCoordinator(ctx context.Context, cfg config.Config, releaseHandler func(context.Context, protocol.Release) protocol.ReleaseReply) (*natsCoordinatorClient, error) {
 	nc, err := nats.Connect(cfg.CoordinatorURL)
 	if err != nil {
 		return nil, err
 	}
-	client := &natsCoordinatorClient{nc: nc, cfg: cfg, stop: make(chan struct{}), done: make(chan struct{})}
+	client := &natsCoordinatorClient{nc: nc, cfg: cfg, stop: make(chan struct{}), done: make(chan struct{}), releaseHandler: releaseHandler}
 	if err := client.register(ctx); err != nil {
 		nc.Close()
 		return nil, err
@@ -162,7 +172,16 @@ func (c *natsCoordinatorClient) register(ctx context.Context) error {
 
 func (c *natsCoordinatorClient) subscribeRelease() error {
 	_, err := c.nc.Subscribe(coordinator.SubjectRelease(c.cfg.NodeName), func(msg *nats.Msg) {
-		respondNATSJSON(msg, protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: releaseRequestID(msg.Data), Status: "fail", Reason: protocol.ErrReleaseFailed})
+		var req protocol.Release
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			respondNATSJSON(msg, protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, Status: "fail", Reason: protocol.ErrInvalidRequest})
+			return
+		}
+		if c.releaseHandler == nil {
+			respondNATSJSON(msg, protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrReleaseFailed})
+			return
+		}
+		respondNATSJSON(msg, c.releaseHandler(context.Background(), req))
 	})
 	if err != nil {
 		return err
@@ -177,12 +196,6 @@ func respondNATSJSON(msg *nats.Msg, v any) {
 		return
 	}
 	_ = msg.Respond(data)
-}
-
-func releaseRequestID(data []byte) string {
-	var req protocol.Release
-	_ = json.Unmarshal(data, &req)
-	return req.RequestID
 }
 
 func (c *natsCoordinatorClient) heartbeatLoop() {
@@ -377,6 +390,103 @@ func (s *Service) handleRelease(ctx context.Context, req protocol.LocalRequest) 
 		result.Error = protocol.ErrLogUnavailable
 	}
 	return result
+}
+
+func (s *Service) handlePeerRelease(ctx context.Context, req protocol.Release) protocol.ReleaseReply {
+	if req.Protocol != protocol.Version || req.Type != protocol.TypeRelease || !protocol.ValidRequestID(req.RequestID) || req.Requester == "" || req.Device == "" {
+		return protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrInvalidRequest}
+	}
+	if replay, ok := s.peerReplay(req); ok {
+		return replay
+	}
+	if !s.hasDevice(req.Device) || req.Requester == s.cfg.NodeName {
+		return protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrStaleRelease}
+	}
+	if !s.tryLock(req.Device) {
+		reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "busy", Reason: protocol.ErrPeerBusy}
+		s.rememberPeer(req, reply)
+		return reply
+	}
+
+	unpairCtx, cancel := context.WithTimeout(ctx, time.Second)
+	_, err := s.runner.Run(unpairCtx, time.Second, "--unpair", req.Device)
+	cancel()
+	if err != nil && unpairCtx.Err() != nil {
+		s.unlock(req.Device)
+		reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrReleaseFailed}
+		s.rememberPeer(req, reply)
+		return reply
+	}
+
+	reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "started"}
+	s.rememberPeer(req, reply)
+	go s.finishPeerRelease(req)
+	return reply
+}
+
+func (s *Service) finishPeerRelease(req protocol.Release) {
+	defer s.unlock(req.Device)
+	deadline := time.Now().Add(time.Duration(req.ReleaseTTLMS) * time.Millisecond)
+	if req.ReleaseTTLMS <= 0 {
+		deadline = time.Now().Add(s.cfg.Timeouts.ReleaseWindow)
+	}
+	for time.Now().Before(deadline) {
+		timeout := 300 * time.Millisecond
+		if remaining := time.Until(deadline); remaining < timeout {
+			timeout = remaining
+		}
+		if timeout <= 0 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		res, err := s.runner.Run(ctx, timeout, "--is-connected", req.Device)
+		cancel()
+		if err == nil {
+			connected, parseErr := bluetooth.ParseConnected(res)
+			if parseErr == nil && !connected {
+				return
+			}
+		}
+		sleep := 200 * time.Millisecond
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		if sleep <= 0 {
+			return
+		}
+		time.Sleep(sleep)
+	}
+}
+
+func (s *Service) hasDevice(address string) bool {
+	for _, device := range s.cfg.Devices {
+		if device == address {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) peerReplay(req protocol.Release) (protocol.ReleaseReply, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for key, replay := range s.peers {
+		if !now.Before(replay.expires) {
+			delete(s.peers, key)
+		}
+	}
+	replay, ok := s.peers[req.RequestID]
+	if !ok || replay.requester != req.Requester || replay.device != req.Device {
+		return protocol.ReleaseReply{}, false
+	}
+	return replay.reply, true
+}
+
+func (s *Service) rememberPeer(req protocol.Release, reply protocol.ReleaseReply) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peers[req.RequestID] = peerReleaseReplay{requester: req.Requester, device: req.Device, reply: reply, expires: time.Now().Add(s.cfg.Timeouts.WholeClaim)}
 }
 
 func (s *Service) replay(clientRequestID string) (claimReplay, bool) {

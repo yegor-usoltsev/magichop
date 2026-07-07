@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,12 +87,77 @@ func TestLocalOperationLockReturnsBusy(t *testing.T) {
 	}
 }
 
+func TestPeerDuplicateReleaseReplaysStartedWithoutSecondUnpair(t *testing.T) {
+	runner := &recordingRunner{}
+	svc := NewService(testConfig(), &memoryStore{}, runner)
+	req := protocol.Release{Protocol: protocol.Version, Type: protocol.TypeRelease, RequestID: mustID(t), Requester: "peer", Device: "aa:bb:cc:dd:ee:ff", ReleaseTTLMS: 50, MaxStartDelayMS: 300}
+
+	first := svc.handlePeerRelease(context.Background(), req)
+	second := svc.handlePeerRelease(context.Background(), req)
+
+	if first.Status != "started" || second.Status != "started" {
+		t.Fatalf("statuses = %q, %q; want started, started", first.Status, second.Status)
+	}
+	if got := runner.count("--unpair"); got != 1 {
+		t.Fatalf("unpair calls = %d, want 1", got)
+	}
+}
+
+func TestPeerReleaseReturnsBusyWhenLocalLockHeld(t *testing.T) {
+	svc := NewService(testConfig(), &memoryStore{}, &recordingRunner{})
+	if !svc.tryLock("aa:bb:cc:dd:ee:ff") {
+		t.Fatal("failed to pre-lock device")
+	}
+	defer svc.unlock("aa:bb:cc:dd:ee:ff")
+
+	reply := svc.handlePeerRelease(context.Background(), protocol.Release{Protocol: protocol.Version, Type: protocol.TypeRelease, RequestID: mustID(t), Requester: "peer", Device: "aa:bb:cc:dd:ee:ff", ReleaseTTLMS: 50, MaxStartDelayMS: 300})
+	if reply.Status != "busy" || reply.Reason != protocol.ErrPeerBusy {
+		t.Fatalf("unexpected reply: %+v", reply)
+	}
+}
+
+type recordingRunner struct {
+	mu    sync.Mutex
+	calls [][]string
+}
+
+func (r *recordingRunner) Run(_ context.Context, _ time.Duration, args ...string) (bluetooth.CommandResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "--is-connected" {
+		return bluetooth.CommandResult{ExitCode: 0, Stdout: "0"}, nil
+	}
+	return bluetooth.CommandResult{ExitCode: 0}, nil
+}
+
+func (r *recordingRunner) count(command string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == command {
+			count++
+		}
+	}
+	return count
+}
+
 func testConfig() config.Config {
 	cfg := config.Defaults()
 	cfg.DefaultDevice = "trackpad"
 	cfg.Devices = map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}
 	cfg.Timeouts.ReleaseWindow = 2 * time.Second
 	return cfg
+}
+
+func mustID(t *testing.T) string {
+	t.Helper()
+	id, err := protocol.NewRequestID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func countEvents(events []state.Event, typ string) int {
