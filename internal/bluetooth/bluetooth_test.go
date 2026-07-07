@@ -33,6 +33,20 @@ func TestParseConnectedRejectsNonZeroExit(t *testing.T) {
 	}
 }
 
+func TestScanPairedDoesNotChangeState(t *testing.T) {
+	runner := &FakeRunner{Results: []CommandResult{{ExitCode: 0, Stdout: "aa:bb:cc:dd:ee:ff Trackpad\n"}}}
+	devices, err := ScanPaired(context.Background(), runner, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devices["aa:bb:cc:dd:ee:ff Trackpad"] == "" {
+		t.Fatalf("unexpected devices: %#v", devices)
+	}
+	if len(runner.Calls) != 1 || runner.Calls[0][0] != "--paired" {
+		t.Fatalf("unexpected calls: %#v", runner.Calls)
+	}
+}
+
 func TestReleaseUnpairsAndVerifiesDisconnected(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{

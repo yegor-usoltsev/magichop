@@ -283,6 +283,13 @@ func (s *Service) handleConn(conn net.Conn) {
 func (s *Service) Handle(ctx context.Context, req protocol.LocalRequest) []any {
 	switch req.Type {
 	case protocol.LocalDevices:
+		if req.Scan {
+			devices, err := bluetooth.ScanPaired(ctx, s.runner, 5*time.Second)
+			if err != nil {
+				return []any{protocol.DevicesResult{Type: protocol.LocalDevicesResult, OK: false, Error: bluetooth.ErrorCode(err)}}
+			}
+			return []any{protocol.DevicesResult{Type: protocol.LocalDevicesResult, OK: true, Devices: devices}}
+		}
 		return []any{protocol.DevicesResult{Type: protocol.LocalDevicesResult, OK: true, Devices: s.cfg.Devices}}
 	case protocol.LocalStatus:
 		device, address, _ := config.ResolveDevice(s.cfg, req.Device)

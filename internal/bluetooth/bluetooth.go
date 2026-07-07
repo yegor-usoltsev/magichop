@@ -321,6 +321,22 @@ func Preflight(path string) error {
 	return nil
 }
 
+func ScanPaired(ctx context.Context, runner Runner, timeout time.Duration) (map[string]string, error) {
+	res, err := runner.Run(ctx, timeout, "--paired")
+	if err != nil {
+		return nil, err
+	}
+	devices := map[string]string{}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		devices[line] = line
+	}
+	return devices, nil
+}
+
 type FakeRunner struct {
 	Results  []CommandResult
 	Calls    [][]string
