@@ -34,6 +34,7 @@ type Service struct {
 	store  eventStore
 	runner bluetooth.Runner
 	coord  coordinatorClient
+	logger *slog.Logger
 
 	mu     sync.Mutex
 	claims map[string]claimReplay
@@ -90,6 +91,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	svc := NewService(cfg, store, bluetooth.ExecRunner{Logger: logger})
+	svc.logger = logger
 	svc.seedRecent(state.DefaultPath())
 	coord, err := connectCoordinator(ctx, cfg, svc.handlePeerRelease)
 	if err != nil {
@@ -363,6 +365,7 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 	if err := s.append(state.Event{Event: state.EventAccepted, RequestID: requestID, ClientRequestID: req.ClientRequestID, Device: displayDevice(device, address), Address: address}); err != nil {
 		return []any{protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: requestID, OK: false, Error: protocol.ErrLogUnavailable, Device: displayDevice(device, address), Address: address}}
 	}
+	s.log("claim_accepted", "request_id", requestID, "device", address)
 	s.rememberAccepted(req.ClientRequestID, accepted)
 
 	final := s.runClaim(ctx, requestID, displayDevice(device, address), address, req.TimeoutMS)
@@ -371,6 +374,7 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 		final.Error = protocol.ErrLogUnavailable
 		final.AcquireSeen = final.AcquireSeen || final.Connected
 	}
+	s.log("claim_final", "request_id", requestID, "device", address, "ok", final.OK, "error", final.Error, "duration_ms", final.DurationMS)
 	s.rememberFinal(req.ClientRequestID, final)
 	return []any{accepted, final}
 }
@@ -704,6 +708,15 @@ func (s *Service) append(event state.Event) error {
 		return fmt.Errorf(protocol.ErrLogUnavailable)
 	}
 	return s.store.Append(event)
+}
+
+func (s *Service) log(msg string, args ...any) {
+	if s.logger == nil {
+		return
+	}
+	base := []any{"node", s.cfg.NodeName}
+	base = append(base, args...)
+	s.logger.Info(msg, base...)
 }
 
 func (s *Service) tryLock(address string) bool {

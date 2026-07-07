@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -84,6 +86,10 @@ func (c ClaimCmd) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if resolved, err := resolveCLIInput(c.Device); err == nil && resolved != "" {
+		req.Device = resolved
+	}
+	_ = persistClientRequestID(clientID)
 	req.ClientRequestID = clientID
 	var accepted protocol.Accepted
 	var final protocol.FinalResult
@@ -107,8 +113,12 @@ type ReleaseCmd struct {
 }
 
 func (c ReleaseCmd) Run(ctx context.Context) error {
+	device := c.Device
+	if resolved, err := resolveCLIInput(c.Device); err == nil && resolved != "" {
+		device = resolved
+	}
 	var out protocol.ReleaseResult
-	if err := callDaemon(ctx, protocol.LocalRequest{Type: protocol.LocalRelease, Device: c.Device}, []any{&out}); err != nil {
+	if err := callDaemon(ctx, protocol.LocalRequest{Type: protocol.LocalRelease, Device: device}, []any{&out}); err != nil {
 		return err
 	}
 	if c.JSON {
@@ -120,6 +130,26 @@ func (c ReleaseCmd) Run(ctx context.Context) error {
 	}
 	fmt.Printf("release failed error=%s\n", out.Error)
 	return runtimeErr(out.Error)
+}
+
+func resolveCLIInput(input string) (string, error) {
+	cfg, _, err := config.Load(config.LoadOptions{})
+	if err != nil {
+		return input, err
+	}
+	_, address, err := config.ResolveDevice(cfg, input)
+	if err != nil {
+		return input, err
+	}
+	return address, nil
+}
+
+func persistClientRequestID(id string) error {
+	dir := filepath.Join(os.TempDir(), "magichop-"+strconv.Itoa(os.Getuid()))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "last-client-request-id"), []byte(id+"\n"), 0o600)
 }
 
 type StatusCmd struct {
