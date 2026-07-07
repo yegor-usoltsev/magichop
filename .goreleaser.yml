@@ -16,7 +16,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/yegor-usoltsev/MagicHop/internal/runtime.Version={{ .Version }}
+      - -s -w -X github.com/yegor-usoltsev/magichop/internal/runtime.Version={{ .Version }}
 
 changelog:
   sort: asc
@@ -62,9 +62,9 @@ dockers_v2:
 release:
   github:
     owner: yegor-usoltsev
-    name: MagicHop
+    name: magichop
   name_template: "v{{ .Version }}"
   footer: |
     ## Docker images
     - [`yusoltsev/magichop:{{ .Version }}`](https://hub.docker.com/r/yusoltsev/magichop/tags?name={{ .Version }})
-    - [`ghcr.io/yegor-usoltsev/magichop:{{ .Version }}`](https://github.com/yegor-usoltsev/MagicHop/pkgs/container/magichop)
+    - [`ghcr.io/yegor-usoltsev/magichop:{{ .Version }}`](https://github.com/yegor-usoltsev/magichop/pkgs/container/magichop)
