@@ -37,6 +37,8 @@ type Service struct {
 	claims map[string]claimReplay
 	locks  map[string]chan struct{}
 	peers  map[string]peerReleaseReplay
+	guards map[string]time.Time
+	recent []protocol.FinalResult
 }
 
 type eventStore interface {
@@ -83,6 +85,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	svc := NewService(cfg, store, bluetooth.ExecRunner{Logger: logger})
+	svc.seedRecent(state.DefaultPath())
 	coord, err := connectCoordinator(ctx, cfg, svc.handlePeerRelease)
 	if err != nil {
 		return err
@@ -162,6 +165,7 @@ func NewService(cfg config.Config, store eventStore, runner bluetooth.Runner) *S
 		claims: map[string]claimReplay{},
 		locks:  map[string]chan struct{}{},
 		peers:  map[string]peerReleaseReplay{},
+		guards: map[string]time.Time{},
 	}
 }
 
@@ -338,6 +342,9 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 	if err != nil {
 		return []any{protocol.FinalResult{Type: protocol.LocalFinalResult, OK: false, Error: protocol.ErrInvalidRequest}}
 	}
+	if err := s.preflightBluetooth(); err != nil {
+		return []any{protocol.FinalResult{Type: protocol.LocalFinalResult, OK: false, Error: protocol.ErrBlueutilMissing, Device: displayDevice(device, address), Address: address}}
+	}
 	if !s.tryLock(address) {
 		return []any{protocol.FinalResult{Type: protocol.LocalFinalResult, OK: false, Error: protocol.ErrBusy, Device: displayDevice(device, address), Address: address}}
 	}
@@ -355,7 +362,9 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 
 	final := s.runClaim(ctx, requestID, displayDevice(device, address), address, req.TimeoutMS)
 	if err := s.append(state.Event{Event: state.EventFinalResult, RequestID: requestID, ClientRequestID: req.ClientRequestID, OK: final.OK, Error: final.Error, DurationMS: final.DurationMS}); err != nil {
+		final.OK = false
 		final.Error = protocol.ErrLogUnavailable
+		final.AcquireSeen = final.AcquireSeen || final.Connected
 	}
 	s.rememberFinal(req.ClientRequestID, final)
 	return []any{accepted, final}
@@ -398,6 +407,11 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 		result.Error = bluetooth.ErrorCode(err)
 		return result
 	}
+	if err := s.persistGuard(address, deadline); err != nil {
+		result.Error = protocol.ErrLogUnavailable
+		result.AcquireSeen = true
+		return result
+	}
 	result.OK = true
 	result.Connected = true
 	result.AcquireSeen = true
@@ -418,11 +432,48 @@ func sleepClipped(ctx context.Context, d time.Duration) error {
 	}
 }
 
+func (s *Service) persistGuard(address string, until time.Time) error {
+	if err := s.append(state.Event{Event: state.EventGuard, Address: address, Until: until}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.guards[address] = until
+	return nil
+}
+
+func (s *Service) guardActive(address string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	until, ok := s.guards[address]
+	if !ok {
+		return false
+	}
+	if !time.Now().Before(until) {
+		delete(s.guards, address)
+		return false
+	}
+	return true
+}
+
+func (s *Service) preflightBluetooth() error {
+	if runner, ok := s.runner.(bluetooth.ExecRunner); ok {
+		return bluetooth.Preflight(runner.Path)
+	}
+	return nil
+}
+
 func (s *Service) handleRelease(ctx context.Context, req protocol.LocalRequest) protocol.ReleaseResult {
 	start := time.Now()
 	device, address, err := config.ResolveDevice(s.cfg, req.Device)
 	if err != nil {
 		return protocol.ReleaseResult{Type: protocol.LocalReleaseResult, OK: false, Error: protocol.ErrInvalidRequest}
+	}
+	if s.store == nil {
+		return protocol.ReleaseResult{Type: protocol.LocalReleaseResult, OK: false, Error: protocol.ErrLogUnavailable, Device: displayDevice(device, address), Address: address}
+	}
+	if err := s.preflightBluetooth(); err != nil {
+		return protocol.ReleaseResult{Type: protocol.LocalReleaseResult, OK: false, Error: protocol.ErrBlueutilMissing, Device: displayDevice(device, address), Address: address}
 	}
 	if !s.tryLock(address) {
 		return protocol.ReleaseResult{Type: protocol.LocalReleaseResult, OK: false, Error: protocol.ErrBusy, Device: displayDevice(device, address), Address: address}
@@ -450,6 +501,9 @@ func (s *Service) handlePeerRelease(ctx context.Context, req protocol.Release) p
 	}
 	if !s.hasDevice(req.Device) || req.Requester == s.cfg.NodeName {
 		return protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrStaleRelease}
+	}
+	if s.guardActive(req.Device) {
+		return protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "busy", Reason: protocol.ErrPeerBusy}
 	}
 	if !s.tryLock(req.Device) {
 		reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "busy", Reason: protocol.ErrPeerBusy}
@@ -557,18 +611,34 @@ func (s *Service) rememberFinal(clientRequestID string, final protocol.FinalResu
 	replay := s.claims[clientRequestID]
 	replay.final = &final
 	s.claims[clientRequestID] = replay
+	s.recent = append(s.recent, final)
+	if len(s.recent) > 100 {
+		s.recent = s.recent[len(s.recent)-100:]
+	}
 }
 
 func (s *Service) recentFinals() []protocol.FinalResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []protocol.FinalResult
+	out := append([]protocol.FinalResult(nil), s.recent...)
 	for _, replay := range s.claims {
 		if replay.final != nil {
 			out = append(out, *replay.final)
 		}
 	}
 	return out
+}
+
+func (s *Service) seedRecent(path string) {
+	events, err := state.RecentFinalResults(path, 100)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, event := range events {
+		s.recent = append(s.recent, protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: event.RequestID, OK: event.OK, Error: event.Error, DurationMS: event.DurationMS})
+	}
 }
 
 func (s *Service) append(event state.Event) error {
