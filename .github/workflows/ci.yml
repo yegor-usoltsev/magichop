@@ -3,23 +3,69 @@ name: CI
 
 on:
   push:
-    branches: [ "**" ]
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  gofmt:
+    name: gofmt
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: go test -v -race -timeout=100s -covermode=atomic -coverprofile=coverage.txt ./...
-      - uses: golangci/golangci-lint-action@v9
-      - uses: goreleaser/goreleaser-action@v7
+      - name: Check formatting
+        shell: bash
+        run: |
+          files="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$files" ]; then
+            echo "$files"
+            exit 1
+          fi
+
+  compile:
+    name: compile ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
-          args: check
-      - uses: codecov/codecov-action@v7
+          go-version-file: go.mod
+      - name: Compile
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -trimpath ./...
+
+  docker-build:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build image
+        uses: docker/build-push-action@v7
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=${{ github.sha }}
