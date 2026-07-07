@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -122,6 +123,24 @@ func TestReleaseUnconfirmedKeepsProtectedLock(t *testing.T) {
 	}
 	if res := core.HandleClaim(context.Background(), claim("requester", "aa:bb:cc:dd:ee:ff", 11000)); res.Status != protocol.ErrClaimBusy {
 		t.Fatalf("second status = %q, want protected claim_busy", res.Status)
+	}
+}
+
+func TestReleaseRequestErrorMarksPeerDead(t *testing.T) {
+	core := NewCore("token", func(context.Context, string, protocol.Release) (protocol.ReleaseReply, error) {
+		return protocol.ReleaseReply{}, errors.New("no responders")
+	})
+	registerNode(core, "requester", "aa:bb:cc:dd:ee:ff")
+	registerNode(core, "peer", "aa:bb:cc:dd:ee:ff")
+
+	if res := core.HandleClaim(context.Background(), claim("requester", "aa:bb:cc:dd:ee:ff", 11000)); res.Status != protocol.ErrReleaseUnconfirmed {
+		t.Fatalf("status = %q", res.Status)
+	}
+	core.mu.Lock()
+	live := core.nodes["peer"].live
+	core.mu.Unlock()
+	if live {
+		t.Fatal("peer should be marked dead")
 	}
 }
 

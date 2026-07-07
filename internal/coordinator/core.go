@@ -163,6 +163,9 @@ func (c *Core) HandleClaim(ctx context.Context, req protocol.Claim) protocol.Cla
 	}
 	reply, err := c.releaseWithTimeout(ctx, peer, releaseReq)
 	if err != nil || reply.Status != "started" {
+		if err != nil {
+			c.MarkDead(peer)
+		}
 		status := protocol.ErrReleaseUnconfirmed
 		if err == nil {
 			switch reply.Status {

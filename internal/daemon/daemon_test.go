@@ -9,6 +9,7 @@ import (
 
 	"github.com/yegor-usoltsev/magichop/internal/bluetooth"
 	"github.com/yegor-usoltsev/magichop/internal/config"
+	"github.com/yegor-usoltsev/magichop/internal/coordinator"
 	"github.com/yegor-usoltsev/magichop/internal/protocol"
 	"github.com/yegor-usoltsev/magichop/internal/state"
 )
@@ -153,6 +154,42 @@ func TestClaimRetriesLostCoordinatorReplyWithSameRequestID(t *testing.T) {
 		t.Fatalf("request ids not reused: %#v", coord.ids)
 	}
 }
+
+func TestClaimFlowWithInProcessCoordinatorAndFakeBluetooth(t *testing.T) {
+	core := coordinator.NewCore("token", func(context.Context, string, protocol.Release) (protocol.ReleaseReply, error) {
+		return protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: mustID(t), Status: "started"}, nil
+	})
+	core.Register(protocol.Register{Protocol: protocol.Version, Type: protocol.TypeRegister, Node: "requester", AuthToken: "token", Devices: map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}})
+	core.Register(protocol.Register{Protocol: protocol.Version, Type: protocol.TypeRegister, Node: "peer", AuthToken: "token", Devices: map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}})
+	cfg := testConfig()
+	cfg.NodeName = "requester"
+	svc := NewService(cfg, &memoryStore{}, &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{
+		{ExitCode: 0},
+		{ExitCode: 0},
+		{ExitCode: 0},
+		{ExitCode: 0, Stdout: "1"},
+	}})
+	svc.coord = coreAdapter{core: core}
+
+	replies := svc.Handle(context.Background(), protocol.LocalRequest{Type: protocol.LocalClaim, ClientRequestID: "client-claim", Device: "trackpad", TimeoutMS: 11000})
+	if len(replies) != 2 {
+		t.Fatalf("replies = %d, want 2", len(replies))
+	}
+	final := replies[1].(protocol.FinalResult)
+	if !final.OK || !final.Connected {
+		t.Fatalf("final = %+v", final)
+	}
+}
+
+type coreAdapter struct {
+	core *coordinator.Core
+}
+
+func (a coreAdapter) Claim(ctx context.Context, claim protocol.Claim) (protocol.ClaimResult, error) {
+	return a.core.HandleClaim(ctx, claim), nil
+}
+
+func (a coreAdapter) Close() {}
 
 type flakyCoordinator struct {
 	ids []string
