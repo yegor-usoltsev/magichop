@@ -11,6 +11,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.0
 	github.com/nats-io/nats-server/v2 v2.12.2
 	github.com/nats-io/nats.go v1.47.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (

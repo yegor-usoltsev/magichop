@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/yegor-usoltsev/magichop/internal/bluetooth"
 	"github.com/yegor-usoltsev/magichop/internal/config"
@@ -76,7 +78,11 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer store.Close()
-	svc := NewService(cfg, store, bluetooth.ExecRunner{})
+	logger, err := openLogger()
+	if err != nil {
+		return err
+	}
+	svc := NewService(cfg, store, bluetooth.ExecRunner{Logger: logger})
 	coord, err := connectCoordinator(ctx, cfg, svc.handlePeerRelease)
 	if err != nil {
 		return err
@@ -107,6 +113,23 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		go svc.handleConn(conn)
 	}
+}
+
+func LogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("Library", "Logs", "MagicHop", "daemon.jsonl")
+	}
+	return filepath.Join(home, "Library", "Logs", "MagicHop", "daemon.jsonl")
+}
+
+func openLogger() (*slog.Logger, error) {
+	path := LogPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	writer := &lumberjack.Logger{Filename: path, MaxSize: 10, MaxBackups: 3, MaxAge: 30, Compress: true}
+	return slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{})), nil
 }
 
 func NewService(cfg config.Config, store eventStore, runner bluetooth.Runner) *Service {
