@@ -27,6 +27,8 @@ type Options struct {
 	ConfigPath string
 }
 
+const LostReplyRetryInterval = 500 * time.Millisecond
+
 type Service struct {
 	cfg    config.Config
 	store  eventStore
@@ -384,8 +386,7 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 	}
 	claimCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	claim := protocol.Claim{Protocol: protocol.Version, Type: protocol.TypeClaim, RequestID: requestID, Requester: s.cfg.NodeName, Device: address, RemainingMS: time.Until(deadline).Milliseconds()}
-	claimResult, err := s.coord.Claim(claimCtx, claim)
+	claimResult, err := s.claimWithRetry(claimCtx, requestID, address, deadline)
 	if err != nil {
 		result.Error = protocol.ErrCoordinatorUnavailable
 		result.DurationMS = time.Since(start).Milliseconds()
@@ -416,6 +417,28 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 	result.Connected = true
 	result.AcquireSeen = true
 	return result
+}
+
+func (s *Service) claimWithRetry(ctx context.Context, requestID, address string, deadline time.Time) (protocol.ClaimResult, error) {
+	for {
+		if !time.Now().Before(deadline) {
+			return protocol.ClaimResult{}, context.DeadlineExceeded
+		}
+		attemptTimeout := LostReplyRetryInterval
+		if remaining := time.Until(deadline); remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		claim := protocol.Claim{Protocol: protocol.Version, Type: protocol.TypeClaim, RequestID: requestID, Requester: s.cfg.NodeName, Device: address, RemainingMS: time.Until(deadline).Milliseconds()}
+		res, err := s.coord.Claim(attemptCtx, claim)
+		cancel()
+		if err == nil {
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			return protocol.ClaimResult{}, ctx.Err()
+		}
+	}
 }
 
 func sleepClipped(ctx context.Context, d time.Duration) error {

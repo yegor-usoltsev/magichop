@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -133,6 +134,39 @@ func TestPeerReleaseReturnsBusyWhenLocalLockHeld(t *testing.T) {
 		t.Fatalf("unexpected reply: %+v", reply)
 	}
 }
+
+func TestClaimRetriesLostCoordinatorReplyWithSameRequestID(t *testing.T) {
+	svc := NewService(testConfig(), &memoryStore{}, &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{
+		{ExitCode: 0},
+		{ExitCode: 0},
+		{ExitCode: 0},
+		{ExitCode: 0, Stdout: "1"},
+	}})
+	coord := &flakyCoordinator{}
+	svc.coord = coord
+
+	final := svc.runClaim(context.Background(), mustID(t), "trackpad", "aa:bb:cc:dd:ee:ff", 4000)
+	if !final.OK {
+		t.Fatalf("final = %+v", final)
+	}
+	if len(coord.ids) != 2 || coord.ids[0] != coord.ids[1] {
+		t.Fatalf("request ids not reused: %#v", coord.ids)
+	}
+}
+
+type flakyCoordinator struct {
+	ids []string
+}
+
+func (c *flakyCoordinator) Claim(_ context.Context, claim protocol.Claim) (protocol.ClaimResult, error) {
+	c.ids = append(c.ids, claim.RequestID)
+	if len(c.ids) == 1 {
+		return protocol.ClaimResult{}, errors.New("lost reply")
+	}
+	return protocol.ClaimResult{Protocol: protocol.Version, Type: protocol.TypeClaimResult, RequestID: claim.RequestID, Status: "proceed", ReleaseWaitMS: 0}, nil
+}
+
+func (c *flakyCoordinator) Close() {}
 
 type recordingRunner struct {
 	mu    sync.Mutex
