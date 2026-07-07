@@ -93,6 +93,11 @@ func Run(ctx context.Context, opts Options) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	lockFile, err := acquireDaemonLock(dir)
+	if err != nil {
+		return err
+	}
+	defer releaseDaemonLock(lockFile)
 	_ = os.Remove(SocketPath())
 	ln, err := net.Listen("unix", SocketPath())
 	if err != nil {
@@ -113,6 +118,20 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		go svc.handleConn(conn)
 	}
+}
+
+func acquireDaemonLock(dir string) (*os.File, error) {
+	path := filepath.Join(dir, "daemon.lock")
+	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+}
+
+func releaseDaemonLock(file *os.File) {
+	if file == nil {
+		return
+	}
+	path := file.Name()
+	_ = file.Close()
+	_ = os.Remove(path)
 }
 
 func LogPath() string {

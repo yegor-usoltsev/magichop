@@ -87,6 +87,24 @@ func TestLocalOperationLockReturnsBusy(t *testing.T) {
 	}
 }
 
+func TestDaemonLockAllowsOnlyOneActiveDaemon(t *testing.T) {
+	dir := t.TempDir()
+	first, err := acquireDaemonLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := acquireDaemonLock(dir); err == nil {
+		releaseDaemonLock(second)
+		t.Fatal("expected second daemon lock to fail")
+	}
+	releaseDaemonLock(first)
+	if third, err := acquireDaemonLock(dir); err != nil {
+		t.Fatalf("expected lock after release: %v", err)
+	} else {
+		releaseDaemonLock(third)
+	}
+}
+
 func TestPeerDuplicateReleaseReplaysStartedWithoutSecondUnpair(t *testing.T) {
 	runner := &recordingRunner{}
 	svc := NewService(testConfig(), &memoryStore{}, runner)
