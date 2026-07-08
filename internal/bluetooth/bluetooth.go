@@ -100,7 +100,7 @@ func (r ExecRunner) Run(ctx context.Context, timeout time.Duration, args ...stri
 		TimedOut: errors.Is(cctx.Err(), context.DeadlineExceeded),
 	}
 	if r.Logger != nil {
-		r.Logger.Info("bluetooth_command", "command", path, "args", args, "timeout", timeout.String(), "exit_code", res.ExitCode, "stdout", res.Stdout, "stderr", res.Stderr, "duration", res.Duration.String(), "timed_out", res.TimedOut)
+		r.Logger.Info("bluetooth command finished", "command", path, "args", args, "timeout", timeout.String(), "exit_code", res.ExitCode, "stdout", res.Stdout, "stderr", strings.TrimSpace(res.Stderr), "duration", res.Duration.String(), "timed_out", res.TimedOut)
 	}
 	return res, err
 }

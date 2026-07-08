@@ -97,7 +97,13 @@ func subscribeHandlers(nc *nats.Conn, core *Core) error {
 			respondJSON(msg, protocol.RegisterResult{Protocol: protocol.Version, Type: protocol.TypeRegisterResult, Status: protocol.ErrInvalidRequest, Reason: protocol.ErrInvalidRequest})
 			return
 		}
-		respondJSON(msg, core.Register(req))
+		res := core.Register(req)
+		if res.Status == "ok" {
+			fmt.Fprintf(os.Stderr, "magichop server registered node=%s devices=%d\n", req.Node, len(req.Devices))
+		} else {
+			fmt.Fprintf(os.Stderr, "magichop server rejected registration node=%s status=%s reason=%s\n", req.Node, res.Status, res.Reason)
+		}
+		respondJSON(msg, res)
 	}); err != nil {
 		return err
 	}
@@ -118,7 +124,9 @@ func subscribeHandlers(nc *nats.Conn, core *Core) error {
 			respondJSON(msg, protocol.ClaimResult{Protocol: protocol.Version, Type: protocol.TypeClaimResult, Status: protocol.ErrInvalidRequest, Reason: protocol.ErrInvalidRequest})
 			return
 		}
-		respondJSON(msg, core.HandleClaim(context.Background(), req))
+		res := core.HandleClaim(context.Background(), req)
+		fmt.Fprintf(os.Stderr, "magichop server claim requester=%s device=%s status=%s release_wait_ms=%d\n", req.Requester, req.Device, res.Status, res.ReleaseWaitMS)
+		respondJSON(msg, res)
 	}); err != nil {
 		return err
 	}

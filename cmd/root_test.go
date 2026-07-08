@@ -1,11 +1,39 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestRunWithoutArgsPrintsHelp(t *testing.T) {
+	stdout := os.Stdout
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writeEnd
+	var out bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&out, readEnd)
+		close(done)
+	}()
+	code := Run(nil)
+	_ = writeEnd.Close()
+	os.Stdout = stdout
+	<-done
+	_ = readEnd.Close()
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "Usage: magichop <command>") {
+		t.Fatalf("help output missing usage: %s", out.String())
+	}
+}
 
 func TestExitCodeMapping(t *testing.T) {
 	stderr := os.Stderr

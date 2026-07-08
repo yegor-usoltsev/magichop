@@ -42,21 +42,40 @@ type CLI struct {
 
 func Run(args []string) int {
 	var cli CLI
-	parser, err := kong.New(&cli, kong.Name("magichop"), kong.Description("Magic peripheral handoff utility"))
+	parser, err := kong.New(&cli, kong.Name("magichop"), kong.Description("Magic peripheral handoff utility"), kong.Exit(func(int) {}))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	if len(args) == 0 {
+		_, _ = parser.Parse([]string{"--help"})
+		return 0
+	}
 	ctx, err := parser.Parse(args)
 	if err != nil {
+		if helpRequested(args) {
+			return 0
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 2
+	}
+	if helpRequested(args) {
+		return 0
 	}
 	ctx.BindTo(context.Background(), (*context.Context)(nil))
 	if err := ctx.Run(); err != nil {
 		return exitCode(err)
 	}
 	return 0
+}
+
+func helpRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
 }
 
 type ServerCmd struct {

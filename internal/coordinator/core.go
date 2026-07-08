@@ -14,6 +14,7 @@ import (
 
 const (
 	SubjectRegister = "mh.v1.register"
+	ReasonNoPeer    = "no_peer"
 )
 
 func SubjectHeartbeat(node string) string {
@@ -148,8 +149,8 @@ func (c *Core) HandleClaim(ctx context.Context, req protocol.Claim) protocol.Cla
 	if locked == protocol.ErrClaimBusy {
 		return claimResult(req.RequestID, protocol.ErrClaimBusy, protocol.ErrClaimBusy)
 	}
-	if locked == protocol.ErrPeerUnavailable {
-		return claimResult(req.RequestID, protocol.ErrPeerUnavailable, protocol.ErrPeerUnavailable)
+	if locked == protocol.ErrPeerUnavailable || peer == "" {
+		return protocol.ClaimResult{Protocol: protocol.Version, Type: protocol.TypeClaimResult, RequestID: req.RequestID, Status: "proceed", ReleaseWaitMS: 0, Reason: ReasonNoPeer}
 	}
 
 	releaseReq := protocol.Release{

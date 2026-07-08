@@ -141,11 +141,18 @@ func TestReleaseRequestErrorMarksPeerDead(t *testing.T) {
 	}
 }
 
-func TestPeerUnavailable(t *testing.T) {
+func TestSingleRegisteredNodeProceedsWithoutPeerRelease(t *testing.T) {
 	core := NewCore("token", nil)
 	registerNode(core, "requester", "aa:bb:cc:dd:ee:ff")
-	if res := core.HandleClaim(context.Background(), claim("requester", "aa:bb:cc:dd:ee:ff", 11000)); res.Status != protocol.ErrPeerUnavailable {
+	res := core.HandleClaim(context.Background(), claim("requester", "aa:bb:cc:dd:ee:ff", 11000))
+	if res.Status != "proceed" {
 		t.Fatalf("status = %q", res.Status)
+	}
+	if res.ReleaseWaitMS != 0 {
+		t.Fatalf("release wait = %d, want 0", res.ReleaseWaitMS)
+	}
+	if res.Reason != ReasonNoPeer {
+		t.Fatalf("reason = %q, want %q", res.Reason, ReasonNoPeer)
 	}
 }
 

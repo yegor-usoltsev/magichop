@@ -186,6 +186,31 @@ func TestClaimFlowWithInProcessCoordinatorAndFakeBluetooth(t *testing.T) {
 	}
 }
 
+func TestClaimFlowWithOnlyRequesterProceedsLocally(t *testing.T) {
+	core := coordinator.NewCore("token", func(context.Context, string, protocol.Release) (protocol.ReleaseReply, error) {
+		t.Fatal("single-node claim should not request peer release")
+		return protocol.ReleaseReply{}, nil
+	})
+	cfg := testConfig()
+	cfg.NodeName = "requester"
+	core.Register(protocol.Register{Protocol: protocol.Version, Type: protocol.TypeRegister, Node: "requester", AuthToken: "token", Devices: map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}})
+	runner := &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{{ExitCode: 0, Stdout: "1"}}}
+	svc := NewService(cfg, &memoryStore{}, runner)
+	svc.coord = coreAdapter{core: core}
+
+	replies := svc.Handle(context.Background(), protocol.LocalRequest{Type: protocol.LocalClaim, ClientRequestID: "client-claim", Device: "trackpad", TimeoutMS: 11000})
+	if len(replies) != 2 {
+		t.Fatalf("replies = %d, want 2", len(replies))
+	}
+	final := replies[1].(protocol.FinalResult)
+	if !final.OK || !final.Connected {
+		t.Fatalf("final = %+v", final)
+	}
+	if len(runner.Calls) != 1 || runner.Calls[0][0] != "--is-connected" {
+		t.Fatalf("single-node connected claim should only check connection, calls=%#v", runner.Calls)
+	}
+}
+
 type coreAdapter struct {
 	core *coordinator.Core
 }

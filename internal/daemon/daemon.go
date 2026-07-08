@@ -94,7 +94,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("daemon_starting", "node", cfg.NodeName, "coordinator_url", cfg.CoordinatorURL, "socket", SocketPath())
+	logger.Info("daemon starting", "node", cfg.NodeName, "coordinator", cfg.CoordinatorURL, "socket", SocketPath())
 	svc := NewService(cfg, store, bluetooth.ExecRunner{Logger: logger})
 	svc.logger = logger
 	svc.seedRecent(state.DefaultPath())
@@ -113,7 +113,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer ln.Close()
-	logger.Info("daemon_ready", "node", cfg.NodeName, "socket", SocketPath())
+	logger.Info("daemon ready", "node", cfg.NodeName, "socket", SocketPath())
 	fmt.Fprintf(os.Stderr, "magichop daemon ready node=%s socket=%s\n", cfg.NodeName, SocketPath())
 	go svc.connectCoordinatorLoop(ctx)
 	go func() {
@@ -137,13 +137,13 @@ func (s *Service) connectCoordinatorLoop(ctx context.Context) {
 		coord, err := connectCoordinator(ctx, s.cfg, s.handlePeerRelease)
 		if err == nil {
 			s.setCoordinator(coord)
-			s.log("coordinator_connected", "url", s.cfg.CoordinatorURL)
+			s.log("coordinator connected", "url", s.cfg.CoordinatorURL)
 			fmt.Fprintf(os.Stderr, "magichop daemon connected coordinator=%s\n", s.cfg.CoordinatorURL)
 			<-ctx.Done()
 			coord.Close()
 			return
 		}
-		s.log("coordinator_connect_failed", "url", s.cfg.CoordinatorURL, "err", err)
+		s.log("coordinator connection failed", "url", s.cfg.CoordinatorURL, "err", err)
 		fmt.Fprintf(os.Stderr, "magichop daemon coordinator connect failed url=%s err=%v\n", s.cfg.CoordinatorURL, err)
 		select {
 		case <-ctx.Done():
@@ -200,7 +200,7 @@ func openLogger() (*slog.Logger, error) {
 		return nil, err
 	}
 	writer := &lumberjack.Logger{Filename: path, MaxSize: 10, MaxBackups: 3, MaxAge: 30, Compress: true}
-	return slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{})), nil
+	return slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{})), nil
 }
 
 func NewService(cfg config.Config, store eventStore, runner bluetooth.Runner) *Service {
@@ -411,7 +411,7 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 	if err := s.append(state.Event{Event: state.EventAccepted, RequestID: requestID, ClientRequestID: req.ClientRequestID, Device: displayDevice(device, address), Address: address}); err != nil {
 		return []any{protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: requestID, OK: false, Error: protocol.ErrLogUnavailable, Device: displayDevice(device, address), Address: address}}
 	}
-	s.log("claim_accepted", "request_id", requestID, "device", address)
+	s.log("claim accepted", "request_id", requestID, "device", displayDevice(device, address), "address", address)
 	s.rememberAccepted(req.ClientRequestID, accepted)
 
 	final := s.runClaim(ctx, requestID, displayDevice(device, address), address, req.TimeoutMS)
@@ -420,7 +420,7 @@ func (s *Service) handleClaim(ctx context.Context, req protocol.LocalRequest) []
 		final.Error = protocol.ErrLogUnavailable
 		final.AcquireSeen = final.AcquireSeen || final.Connected
 	}
-	s.log("claim_final", "request_id", requestID, "device", address, "ok", final.OK, "error", final.Error, "duration_ms", final.DurationMS)
+	s.log("claim finished", "request_id", requestID, "device", final.Device, "address", final.Address, "ok", final.OK, "error", final.Error, "duration_ms", final.DurationMS)
 	s.rememberFinal(req.ClientRequestID, final)
 	return []any{accepted, final}
 }
@@ -451,6 +451,15 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 		result.DurationMS = time.Since(start).Milliseconds()
 		return result
 	}
+	if claimResult.Reason == coordinator.ReasonNoPeer {
+		if connected, err := s.localConnected(ctx, address); err == nil && connected {
+			result.DurationMS = time.Since(start).Milliseconds()
+			result.OK = true
+			result.Connected = true
+			result.AcquireSeen = true
+			return result
+		}
+	}
 	if err := sleepClipped(claimCtx, time.Duration(claimResult.ReleaseWaitMS)*time.Millisecond); err != nil {
 		result.Error = protocol.ErrClaimTimeout
 		result.DurationMS = time.Since(start).Milliseconds()
@@ -471,6 +480,14 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 	result.Connected = true
 	result.AcquireSeen = true
 	return result
+}
+
+func (s *Service) localConnected(ctx context.Context, address string) (bool, error) {
+	res, err := s.runner.Run(ctx, 300*time.Millisecond, "--is-connected", address)
+	if err != nil {
+		return false, err
+	}
+	return bluetooth.ParseConnected(res)
 }
 
 func (s *Service) claimWithRetry(ctx context.Context, coord coordinatorClient, requestID, address string, deadline time.Time) (protocol.ClaimResult, error) {
