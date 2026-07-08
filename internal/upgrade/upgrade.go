@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/yegor-usoltsev/magichop/internal/daemon"
+	"github.com/yegor-usoltsev/magichop/internal/release"
 )
 
 const (
@@ -57,6 +58,7 @@ type deps struct {
 	stdout     io.Writer
 	executable func() (string, error)
 	restart    func(context.Context, string) error
+	version    func() string
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -68,6 +70,7 @@ func Run(ctx context.Context, opts Options) error {
 		stdout:     os.Stdout,
 		executable: currentExecutable,
 		restart:    restartLaunchAgentIfInstalled,
+		version:    currentVersion,
 	}
 	return run(ctx, opts, d)
 }
@@ -94,6 +97,9 @@ func run(ctx context.Context, opts Options, d deps) error {
 	if d.restart == nil {
 		d.restart = restartLaunchAgentIfInstalled
 	}
+	if d.version == nil {
+		d.version = currentVersion
+	}
 
 	rel, err := fetchRelease(ctx, d.client, d.apiBase, opts.Version)
 	if err != nil {
@@ -101,6 +107,10 @@ func run(ctx context.Context, opts Options, d deps) error {
 	}
 	if opts.Check {
 		_, err := fmt.Fprintln(d.stdout, rel.TagName)
+		return err
+	}
+	if versionsEqual(d.version(), rel.TagName) {
+		_, err := fmt.Fprintf(d.stdout, "already on %s\n", rel.TagName)
 		return err
 	}
 
@@ -152,6 +162,10 @@ func run(ctx context.Context, opts Options, d deps) error {
 	return err
 }
 
+func currentVersion() string {
+	return release.Version
+}
+
 func fetchRelease(ctx context.Context, client *http.Client, apiBase, version string) (githubRelease, error) {
 	path := "/latest"
 	if version != "" {
@@ -181,6 +195,15 @@ func normalizeVersion(version string) string {
 		return version
 	}
 	return "v" + version
+}
+
+func versionsEqual(current, target string) bool {
+	current = normalizeVersion(current)
+	target = normalizeVersion(target)
+	if current == "" || current == "dev" || current == "vdev" || current == "unknown" || current == "vunknown" {
+		return false
+	}
+	return current == target
 }
 
 func selectArchiveAsset(assets []githubAsset, goos, goarch string) (githubAsset, error) {

@@ -108,6 +108,40 @@ func TestRunDownloadsVerifiesAndReplacesBinary(t *testing.T) {
 	}
 }
 
+func TestRunSkipsWhenCurrentVersionMatchesRelease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/latest" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"magichop_1.2.3_darwin_arm64.tar.gz","browser_download_url":"%s/archive"}]}`, r.Host)
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	err := run(context.Background(), Options{}, deps{
+		client:  server.Client(),
+		apiBase: server.URL,
+		stdout:  &out,
+		version: func() string {
+			return "1.2.3"
+		},
+		executable: func() (string, error) {
+			t.Fatal("matching version should not inspect executable")
+			return "", nil
+		},
+		restart: func(context.Context, string) error {
+			t.Fatal("matching version should not restart")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("run upgrade: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "already on v1.2.3" {
+		t.Fatalf("output = %q, want already on v1.2.3", got)
+	}
+}
+
 func TestChecksumMismatchRefusesReplacement(t *testing.T) {
 	archive := tarGz(t, "magichop", []byte("new binary"))
 	checksums := strings.Repeat("0", 64) + "  magichop_1.2.3_darwin_arm64.tar.gz\n"
