@@ -27,8 +27,7 @@ import (
 const (
 	githubAPI             = "https://api.github.com/repos/yegor-usoltsev/magichop/releases"
 	launchAgentLabel      = "dev.magichop.daemon"
-	checksumAssetName     = "checksums.txt"
-	goreleaserChecksum    = "checksums.sha256.txt"
+	checksumAssetName     = "checksums.sha256.txt"
 	restartSocketTimeout  = 5 * time.Second
 	restartSocketInterval = 200 * time.Millisecond
 )
@@ -211,14 +210,12 @@ func selectArchiveAsset(assets []githubAsset, goos, goarch string) (githubAsset,
 }
 
 func selectChecksumAsset(assets []githubAsset) (githubAsset, error) {
-	for _, want := range []string{checksumAssetName, goreleaserChecksum} {
-		for _, asset := range assets {
-			if strings.EqualFold(asset.Name, want) {
-				return asset, nil
-			}
+	for _, asset := range assets {
+		if strings.EqualFold(asset.Name, checksumAssetName) {
+			return asset, nil
 		}
 	}
-	return githubAsset{}, errors.New("release is missing checksums.txt")
+	return githubAsset{}, errors.New("release is missing checksums.sha256.txt")
 }
 
 func download(ctx context.Context, client *http.Client, url string) ([]byte, error) {

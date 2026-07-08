@@ -60,7 +60,7 @@ func TestRunDownloadsVerifiesAndReplacesBinary(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/tags/v1.2.3":
-			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"magichop_1.2.3_darwin_arm64.tar.gz","browser_download_url":"%s/archive"},{"name":"checksums.txt","browser_download_url":"%s/checksums"}]}`, server.URL, server.URL)
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"magichop_1.2.3_darwin_arm64.tar.gz","browser_download_url":"%s/archive"},{"name":"checksums.sha256.txt","browser_download_url":"%s/checksums"}]}`, server.URL, server.URL)
 		case "/archive":
 			_, _ = w.Write(archive)
 		case "/checksums":
@@ -116,7 +116,7 @@ func TestChecksumMismatchRefusesReplacement(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest":
-			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"magichop_1.2.3_darwin_arm64.tar.gz","browser_download_url":"%s/archive"},{"name":"checksums.txt","browser_download_url":"%s/checksums"}]}`, server.URL, server.URL)
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":"magichop_1.2.3_darwin_arm64.tar.gz","browser_download_url":"%s/archive"},{"name":"checksums.sha256.txt","browser_download_url":"%s/checksums"}]}`, server.URL, server.URL)
 		case "/archive":
 			_, _ = w.Write(archive)
 		case "/checksums":
@@ -173,7 +173,7 @@ func TestChecksumForSupportsCommonFormats(t *testing.T) {
 
 func TestSelectArchiveAssetMatchesPlatform(t *testing.T) {
 	asset, err := selectArchiveAsset([]githubAsset{
-		{Name: "checksums.txt"},
+		{Name: "checksums.sha256.txt"},
 		{Name: "magichop_1.2.3_linux_amd64.tar.gz"},
 		{Name: "magichop_1.2.3_darwin_arm64.tar.gz"},
 	}, "darwin", "arm64")

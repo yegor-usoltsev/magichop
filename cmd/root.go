@@ -50,7 +50,8 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	if err := ctx.Run(context.Background()); err != nil {
+	ctx.BindTo(context.Background(), (*context.Context)(nil))
+	if err := ctx.Run(); err != nil {
 		return exitCode(err)
 	}
 	return 0
