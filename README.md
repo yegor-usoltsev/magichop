@@ -61,13 +61,6 @@ Create `~/.config/magichop/config.json`:
   "devices": {
     "keyboard": "aa:bb:cc:dd:ee:01",
     "trackpad": "aa:bb:cc:dd:ee:02"
-  },
-  "timeouts": {
-    "whole_claim": "11s",
-    "release_start_wait": "300ms",
-    "release_window": "2s",
-    "pair": "5s",
-    "connect_attempt": "2s"
   }
 }
 ```
@@ -134,10 +127,10 @@ magichop doctor --json
 Generate Raycast Script Commands:
 
 ```bash
-magichop install raycast --dir ~/raycast-scripts
+magichop install raycast
 ```
 
-Add that directory in Raycast under Settings -> Extensions -> Script Commands -> Add Script Directory.
+Add `~/.local/raycast-scripts` in Raycast under Settings -> Extensions -> Script Commands -> Add Script Directory.
 
 Generated scripts call `magichop claim <device>`. Raycast and other local clients never run `blueutil` directly.
 
@@ -164,7 +157,7 @@ magichop status [device-or-address] [--json]
 magichop devices [--scan] [--json]
 magichop doctor [--json]
 magichop install mac
-magichop install raycast --dir DIR
+magichop install raycast [--dir DIR]
 magichop uninstall mac
 magichop edit
 magichop upgrade [--check] [--version VERSION] [--yes]

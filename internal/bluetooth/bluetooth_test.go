@@ -34,12 +34,12 @@ func TestParseConnectedRejectsNonZeroExit(t *testing.T) {
 }
 
 func TestScanPairedDoesNotChangeState(t *testing.T) {
-	runner := &FakeRunner{Results: []CommandResult{{ExitCode: 0, Stdout: "aa:bb:cc:dd:ee:ff Trackpad\n"}}}
+	runner := &FakeRunner{Results: []CommandResult{{ExitCode: 0, Stdout: "address: AA-BB-CC-DD-EE-FF, connected, paired, name: \"Trackpad\"\n11:22:33:44:55:66 Keyboard\n"}}}
 	devices, err := ScanPaired(context.Background(), runner, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if devices["aa:bb:cc:dd:ee:ff Trackpad"] == "" {
+	if devices["Trackpad"] != "aa:bb:cc:dd:ee:ff" || devices["Keyboard"] != "11:22:33:44:55:66" {
 		t.Fatalf("unexpected devices: %#v", devices)
 	}
 	if len(runner.Calls) != 1 || runner.Calls[0][0] != "--paired" {

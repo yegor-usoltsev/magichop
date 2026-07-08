@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.AuthToken == "" {
 		return fmt.Errorf("auth token required")
 	}
+	fmt.Fprintf(os.Stderr, "magichop server starting host=%s port=%d\n", opts.Host, opts.Port)
 	ns, err := server.NewServer(&server.Options{
 		Host:      opts.Host,
 		Port:      opts.Port,
@@ -78,8 +80,13 @@ func Run(ctx context.Context, opts Options) error {
 		ns.Shutdown()
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "magichop server ready host=%s port=%d\n", opts.Host, opts.Port)
 	<-ctx.Done()
 	ns.Shutdown()
+	if ctx.Err() == context.Canceled {
+		fmt.Fprintln(os.Stderr, "magichop server stopped")
+		return nil
+	}
 	return ctx.Err()
 }
 

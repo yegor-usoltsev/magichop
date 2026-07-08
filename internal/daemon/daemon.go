@@ -28,13 +28,16 @@ type Options struct {
 }
 
 const LostReplyRetryInterval = 500 * time.Millisecond
+const coordinatorRetryInterval = 2 * time.Second
 
 type Service struct {
 	cfg    config.Config
 	store  eventStore
 	runner bluetooth.Runner
-	coord  coordinatorClient
 	logger *slog.Logger
+
+	coordMu sync.RWMutex
+	coord   coordinatorClient
 
 	mu     sync.Mutex
 	claims map[string]claimReplay
@@ -74,6 +77,7 @@ func SocketPath() string {
 }
 
 func Run(ctx context.Context, opts Options) error {
+	fmt.Fprintf(os.Stderr, "magichop daemon starting config=%s socket=%s\n", opts.ConfigPath, SocketPath())
 	cfg, _, err := config.Load(config.LoadOptions{Path: opts.ConfigPath})
 	if err != nil {
 		return err
@@ -90,15 +94,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	logger.Info("daemon_starting", "node", cfg.NodeName, "coordinator_url", cfg.CoordinatorURL, "socket", SocketPath())
 	svc := NewService(cfg, store, bluetooth.ExecRunner{Logger: logger})
 	svc.logger = logger
 	svc.seedRecent(state.DefaultPath())
-	coord, err := connectCoordinator(ctx, cfg, svc.handlePeerRelease)
-	if err != nil {
-		return err
-	}
-	defer coord.Close()
-	svc.coord = coord
 	dir := filepath.Dir(SocketPath())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -114,6 +113,9 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer ln.Close()
+	logger.Info("daemon_ready", "node", cfg.NodeName, "socket", SocketPath())
+	fmt.Fprintf(os.Stderr, "magichop daemon ready node=%s socket=%s\n", cfg.NodeName, SocketPath())
+	go svc.connectCoordinatorLoop(ctx)
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
@@ -130,18 +132,58 @@ func Run(ctx context.Context, opts Options) error {
 	}
 }
 
+func (s *Service) connectCoordinatorLoop(ctx context.Context) {
+	for {
+		coord, err := connectCoordinator(ctx, s.cfg, s.handlePeerRelease)
+		if err == nil {
+			s.setCoordinator(coord)
+			s.log("coordinator_connected", "url", s.cfg.CoordinatorURL)
+			fmt.Fprintf(os.Stderr, "magichop daemon connected coordinator=%s\n", s.cfg.CoordinatorURL)
+			<-ctx.Done()
+			coord.Close()
+			return
+		}
+		s.log("coordinator_connect_failed", "url", s.cfg.CoordinatorURL, "err", err)
+		fmt.Fprintf(os.Stderr, "magichop daemon coordinator connect failed url=%s err=%v\n", s.cfg.CoordinatorURL, err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(coordinatorRetryInterval):
+		}
+	}
+}
+
+func (s *Service) setCoordinator(coord coordinatorClient) {
+	s.coordMu.Lock()
+	defer s.coordMu.Unlock()
+	s.coord = coord
+}
+
+func (s *Service) getCoordinator() coordinatorClient {
+	s.coordMu.RLock()
+	defer s.coordMu.RUnlock()
+	return s.coord
+}
+
 func acquireDaemonLock(dir string) (*os.File, error) {
 	path := filepath.Join(dir, "daemon.lock")
-	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(file); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 func releaseDaemonLock(file *os.File) {
 	if file == nil {
 		return
 	}
-	path := file.Name()
+	_ = unlockFile(file)
 	_ = file.Close()
-	_ = os.Remove(path)
 }
 
 func LogPath() string {
@@ -323,7 +365,11 @@ func (s *Service) Handle(ctx context.Context, req protocol.LocalRequest) []any {
 		return []any{protocol.DevicesResult{Type: protocol.LocalDevicesResult, OK: true, Devices: s.cfg.Devices}}
 	case protocol.LocalStatus:
 		device, address, _ := config.ResolveDevice(s.cfg, req.Device)
-		return []any{protocol.StatusResult{Type: protocol.LocalStatusResult, OK: true, Daemon: "running", Coordinator: "disconnected", Device: displayDevice(device, address), Recent: s.recentFinals()}}
+		coordinatorStatus := "disconnected"
+		if s.getCoordinator() != nil {
+			coordinatorStatus = "connected"
+		}
+		return []any{protocol.StatusResult{Type: protocol.LocalStatusResult, OK: true, Daemon: "running", Coordinator: coordinatorStatus, Device: displayDevice(device, address), Recent: s.recentFinals()}}
 	case protocol.LocalDoctor:
 		return []any{s.handleDoctor()}
 	case protocol.LocalRelease:
@@ -386,14 +432,15 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 	}
 	deadline := start.Add(time.Duration(timeoutMS) * time.Millisecond)
 	result := protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: requestID, Device: device, Address: address}
-	if s.coord == nil {
+	coord := s.getCoordinator()
+	if coord == nil {
 		result.Error = protocol.ErrCoordinatorUnavailable
 		result.DurationMS = time.Since(start).Milliseconds()
 		return result
 	}
 	claimCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	claimResult, err := s.claimWithRetry(claimCtx, requestID, address, deadline)
+	claimResult, err := s.claimWithRetry(claimCtx, coord, requestID, address, deadline)
 	if err != nil {
 		result.Error = protocol.ErrCoordinatorUnavailable
 		result.DurationMS = time.Since(start).Milliseconds()
@@ -426,7 +473,7 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 	return result
 }
 
-func (s *Service) claimWithRetry(ctx context.Context, requestID, address string, deadline time.Time) (protocol.ClaimResult, error) {
+func (s *Service) claimWithRetry(ctx context.Context, coord coordinatorClient, requestID, address string, deadline time.Time) (protocol.ClaimResult, error) {
 	for {
 		if !time.Now().Before(deadline) {
 			return protocol.ClaimResult{}, context.DeadlineExceeded
@@ -437,7 +484,7 @@ func (s *Service) claimWithRetry(ctx context.Context, requestID, address string,
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		claim := protocol.Claim{Protocol: protocol.Version, Type: protocol.TypeClaim, RequestID: requestID, Requester: s.cfg.NodeName, Device: address, RemainingMS: time.Until(deadline).Milliseconds()}
-		res, err := s.coord.Claim(attemptCtx, claim)
+		res, err := coord.Claim(attemptCtx, claim)
 		cancel()
 		if err == nil {
 			return res, nil
@@ -527,7 +574,7 @@ func (s *Service) handleDoctor() protocol.DoctorResult {
 		{Name: "config", OK: s.cfg.CoordinatorURL != "" && s.cfg.AuthToken != ""},
 		{Name: "blueutil", OK: s.preflightBluetooth() == nil},
 		{Name: "daemon_socket", OK: true},
-		{Name: "coordinator", OK: s.coord != nil},
+		{Name: "coordinator", OK: s.getCoordinator() != nil},
 		{Name: "state", OK: s.store != nil},
 		{Name: "log", OK: pathWritable(LogPath())},
 	}

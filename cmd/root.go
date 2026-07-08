@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -64,7 +66,10 @@ type ServerCmd struct {
 }
 
 func (c ServerCmd) Run(ctx context.Context) error {
-	return coordinator.Run(ctx, coordinator.Options{Host: c.Host, Port: c.Port, AuthToken: c.AuthToken})
+	if err := coordinator.Run(ctx, coordinator.Options{Host: c.Host, Port: c.Port, AuthToken: c.AuthToken}); err != nil {
+		return fmt.Errorf("server failed: %w", err)
+	}
+	return nil
 }
 
 type DaemonCmd struct {
@@ -72,7 +77,10 @@ type DaemonCmd struct {
 }
 
 func (c DaemonCmd) Run(ctx context.Context) error {
-	return daemon.Run(ctx, daemon.Options{ConfigPath: expandHome(c.Config)})
+	if err := daemon.Run(ctx, daemon.Options{ConfigPath: expandHome(c.Config)}); err != nil {
+		return fmt.Errorf("daemon failed: %w", err)
+	}
+	return nil
 }
 
 type ClaimCmd struct {
@@ -98,7 +106,13 @@ func (c ClaimCmd) Run(ctx context.Context) error {
 		return err
 	}
 	if c.JSON {
-		return printJSON(final)
+		if err := printJSON(final); err != nil {
+			return err
+		}
+		if !final.OK {
+			return runtimeErr(final.Error)
+		}
+		return nil
 	}
 	if final.OK {
 		fmt.Printf("claimed %s request_id=%s\n", final.Device, final.RequestID)
@@ -123,7 +137,13 @@ func (c ReleaseCmd) Run(ctx context.Context) error {
 		return err
 	}
 	if c.JSON {
-		return printJSON(out)
+		if err := printJSON(out); err != nil {
+			return err
+		}
+		if !out.OK {
+			return runtimeErr(out.Error)
+		}
+		return nil
 	}
 	if out.OK {
 		fmt.Printf("released %s\n", out.Device)
@@ -217,11 +237,15 @@ type InstallMacCmd struct {
 }
 
 func (c InstallMacCmd) Run(_ context.Context) error {
-	return install.Mac(expandHome(c.Config), os.Args[0])
+	binary, err := executablePath()
+	if err != nil {
+		return err
+	}
+	return install.Mac(expandHome(c.Config), binary)
 }
 
 type InstallRaycastCmd struct {
-	Dir string `required:"" help:"Raycast script directory."`
+	Dir string `help:"Raycast script directory." default:"~/.local/raycast-scripts"`
 }
 
 func (c InstallRaycastCmd) Run(_ context.Context) error {
@@ -229,7 +253,11 @@ func (c InstallRaycastCmd) Run(_ context.Context) error {
 	if err != nil {
 		return usageErr(err)
 	}
-	return install.Raycast(expandHome(c.Dir), cfg, os.Args[0])
+	binary, err := executablePath()
+	if err != nil {
+		return err
+	}
+	return install.Raycast(expandHome(c.Dir), cfg, binary)
 }
 
 type UninstallCmd struct {
@@ -322,9 +350,11 @@ func runtimeErr(msg string) error {
 func exitCode(err error) int {
 	var coded codedError
 	if errors.As(err, &coded) {
+		fmt.Fprintln(os.Stderr, coded.err)
 		return coded.code
 	}
 	if errors.Is(err, os.ErrPermission) {
+		fmt.Fprintln(os.Stderr, err)
 		return 4
 	}
 	fmt.Fprintln(os.Stderr, err)
@@ -346,4 +376,20 @@ func expandHome(path string) string {
 		return home + path[1:]
 	}
 	return path
+}
+
+func executablePath() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		if abs, err := filepath.Abs(exe); err == nil {
+			return abs, nil
+		}
+	}
+	if strings.ContainsRune(os.Args[0], filepath.Separator) {
+		return filepath.Abs(os.Args[0])
+	}
+	path, err := exec.LookPath(os.Args[0])
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(path)
 }

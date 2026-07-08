@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -91,6 +93,9 @@ func TestLocalOperationLockReturnsBusy(t *testing.T) {
 
 func TestDaemonLockAllowsOnlyOneActiveDaemon(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "daemon.lock"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	first, err := acquireDaemonLock(dir)
 	if err != nil {
 		t.Fatal(err)

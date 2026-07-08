@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -332,9 +333,36 @@ func ScanPaired(ctx context.Context, runner Runner, timeout time.Duration) (map[
 		if line == "" {
 			continue
 		}
-		devices[line] = line
+		name, address, ok := parsePairedLine(line)
+		if !ok {
+			continue
+		}
+		devices[name] = address
 	}
 	return devices, nil
+}
+
+var pairedAddressPattern = regexp.MustCompile(`(?i)(?:^|address:\s*)([0-9a-f]{2}(?:[:-][0-9a-f]{2}){5})`)
+var pairedNamePattern = regexp.MustCompile(`name:\s*"([^"]+)"`)
+
+func parsePairedLine(line string) (string, string, bool) {
+	addressMatch := pairedAddressPattern.FindStringSubmatch(line)
+	if addressMatch == nil {
+		return "", "", false
+	}
+	address := normalizeAddress(addressMatch[1])
+	name := address
+	if nameMatch := pairedNamePattern.FindStringSubmatch(line); nameMatch != nil && strings.TrimSpace(nameMatch[1]) != "" {
+		name = strings.TrimSpace(nameMatch[1])
+	} else if fields := strings.Fields(line); len(fields) > 1 && strings.EqualFold(fields[0], addressMatch[1]) {
+		name = strings.Join(fields[1:], " ")
+	}
+	return name, address, true
+}
+
+func normalizeAddress(address string) string {
+	parts := strings.FieldsFunc(address, func(r rune) bool { return r == ':' || r == '-' })
+	return strings.ToLower(strings.Join(parts, ":"))
 }
 
 type FakeRunner struct {

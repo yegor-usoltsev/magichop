@@ -10,6 +10,7 @@ func TestNormalizeAddress(t *testing.T) {
 	tests := map[string]string{
 		"AA:BB:CC:DD:EE:FF": "aa:bb:cc:dd:ee:ff",
 		"aa-bb-cc-dd-ee-ff": "aa:bb:cc:dd:ee:ff",
+		"AA-BB-CC-DD-EE-FF": "aa:bb:cc:dd:ee:ff",
 	}
 	for input, want := range tests {
 		got, err := NormalizeAddress(input)

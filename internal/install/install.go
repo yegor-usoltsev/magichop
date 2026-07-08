@@ -35,10 +35,11 @@ func Mac(configPath, binary string) error {
 	if err := os.WriteFile(plist, []byte(launchAgent(binary, configPath)), 0o644); err != nil {
 		return err
 	}
+	_ = exec.Command("launchctl", "unload", plist).Run()
 	if err := exec.Command("launchctl", "load", plist).Run(); err != nil {
 		return err
 	}
-	conn, err := net.DialTimeout("unix", daemon.SocketPath(), 5*time.Second)
+	conn, err := waitForDaemonSocket(5 * time.Second)
 	if err != nil {
 		return err
 	}
@@ -94,10 +95,19 @@ func EnsureConfig(path string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	cfg := config.Defaults()
-	cfg.AuthToken = "CHANGE_ME"
-	cfg.DefaultDevice = "trackpad"
-	cfg.Devices = map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"}
+	cfg := struct {
+		NodeName       string            `json:"node_name"`
+		CoordinatorURL string            `json:"coordinator_url"`
+		AuthToken      string            `json:"auth_token"`
+		DefaultDevice  string            `json:"default_device"`
+		Devices        map[string]string `json:"devices"`
+	}{
+		NodeName:       defaultNodeName(),
+		CoordinatorURL: config.Defaults().CoordinatorURL,
+		AuthToken:      "CHANGE_ME",
+		DefaultDevice:  "trackpad",
+		Devices:        map[string]string{"trackpad": "aa:bb:cc:dd:ee:ff"},
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -106,15 +116,21 @@ func EnsureConfig(path string) error {
 }
 
 func launchAgent(binary, configPath string) string {
+	logDir := filepath.Join(mustHome(), "Library", "Logs", "MagicHop")
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>dev.magichop.daemon</string>
 <key>ProgramArguments</key><array><string>%s</string><string>daemon</string><string>--config</string><string>%s</string></array>
+<key>EnvironmentVariables</key><dict>
+<key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+</dict>
+<key>StandardOutPath</key><string>%s</string>
+<key>StandardErrorPath</key><string>%s</string>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
 </dict></plist>
-`, binary, configPath)
+`, binary, configPath, filepath.Join(logDir, "daemon.stdout.log"), filepath.Join(logDir, "daemon.stderr.log"))
 }
 
 func mustHome() string {
@@ -123,4 +139,29 @@ func mustHome() string {
 		return "."
 	}
 	return home
+}
+
+func defaultNodeName() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "mac"
+	}
+	return host
+}
+
+func waitForDaemonSocket(timeout time.Duration) (net.Conn, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("unix", daemon.SocketPath(), 250*time.Millisecond)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = os.ErrDeadlineExceeded
+	}
+	return nil, lastErr
 }
