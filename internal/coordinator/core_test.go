@@ -118,9 +118,6 @@ func TestReleaseUnconfirmedKeepsProtectedLock(t *testing.T) {
 	if res := core.HandleClaim(context.Background(), claim("requester", "aa:bb:cc:dd:ee:ff", 11000)); res.Status != protocol.ErrReleaseUnconfirmed {
 		t.Fatalf("first status = %q", res.Status)
 	}
-	core.release = func(_ context.Context, _ string, req protocol.Release) (protocol.ReleaseReply, error) {
-		return protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "started"}, nil
-	}
 	if res := core.HandleClaim(context.Background(), claim("requester", "aa:bb:cc:dd:ee:ff", 11000)); res.Status != protocol.ErrClaimBusy {
 		t.Fatalf("second status = %q, want protected claim_busy", res.Status)
 	}

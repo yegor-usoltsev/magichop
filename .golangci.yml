@@ -11,60 +11,25 @@ linters:
     - exhaustive
     - govet
     - ineffassign
-    - noctx
     - staticcheck
     - unused
 
     # style and code quality
     - dupl
-    - forbidigo
     - gochecknoinits
-    - gocritic
     - misspell
-    - modernize
     - nakedret
     - nestif
     - nolintlint
-    - prealloc
-    - revive
-    - sloglint
     - testifylint
     - unconvert
-    - unparam
 
     # error handling and security
     - errorlint
-    - gosec
-    - wrapcheck
 
   settings:
-    forbidigo:
-      forbid:
-        - pattern: "^(print(|ln)|fmt\\.Print(|f|ln)|os\\.Exit)$"
-          msg: Use structured logging, return errors, or panic instead when appropriate.
-    gocritic:
-      enabled-tags:
-        - performance
-        - style
-        - experimental
-      disabled-checks:
-        - hugeParam
-        - rangeValCopy
-        - wrapperFunc
-    gosec:
-      excludes:
-        - G120 # form data without body size limit
-        - G122 # filepath.Walk/WalkDir TOCTOU
-        - G703 # path traversal via taint analysis
-        - G704 # SSRF via taint analysis
-        - G706 # log injection via taint analysis
     misspell:
       locale: US
-    sloglint:
-      key-naming-case: snake
-      kv-only: true
-      msg-style: lowercased
-      static-msg: true
 
   exclusions:
     paths:

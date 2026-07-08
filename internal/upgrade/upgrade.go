@@ -140,10 +140,10 @@ func run(ctx context.Context, opts Options, d deps) error {
 
 	if err := d.restart(ctx, oldPath); err != nil {
 		if restoreErr := restoreOldBinary(exe, oldPath); restoreErr != nil {
-			return fmt.Errorf("restart failed after upgrade: %w; restore failed: %v", err, restoreErr)
+			return fmt.Errorf("restart failed after upgrade: %w; restore failed: %w", err, restoreErr)
 		}
 		if restartErr := d.restart(ctx, oldPath); restartErr != nil {
-			return fmt.Errorf("restart failed after upgrade: %w; restored old binary but restart failed: %v", err, restartErr)
+			return fmt.Errorf("restart failed after upgrade: %w; restored old binary but restart failed: %w", err, restartErr)
 		}
 		return fmt.Errorf("restart failed after upgrade; restored old binary: %w", err)
 	}
@@ -194,7 +194,7 @@ func selectArchiveAsset(assets []githubAsset, goos, goarch string) (githubAsset,
 	goos = strings.ToLower(goos)
 	for _, asset := range assets {
 		name := strings.ToLower(asset.Name)
-		if !(strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip")) {
+		if !strings.HasSuffix(name, ".tar.gz") && !strings.HasSuffix(name, ".zip") {
 			continue
 		}
 		if !strings.Contains(name, goos) {

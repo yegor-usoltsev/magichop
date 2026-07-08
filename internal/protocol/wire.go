@@ -100,7 +100,7 @@ var shapeValidator = validator.New(validator.WithRequiredStructEnabled())
 
 func ValidateShape(v any) error {
 	if err := shapeValidator.Struct(v); err != nil {
-		return fmt.Errorf("%w: %v", errors.New(ErrInvalidRequest), err)
+		return fmt.Errorf("%w: %w", errors.New(ErrInvalidRequest), err)
 	}
 	return nil
 }
