@@ -50,6 +50,7 @@ func TestScanPairedDoesNotChangeState(t *testing.T) {
 func TestReleaseUnpairsAndVerifiesDisconnected(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{
+		{ExitCode: 0, Stdout: "1"},
 		{ExitCode: 1},
 		{ExitCode: 0, Stdout: "1"},
 		{ExitCode: 0, Stdout: "0"},
@@ -61,6 +62,7 @@ func TestReleaseUnpairsAndVerifiesDisconnected(t *testing.T) {
 	}
 
 	wantCalls := [][]string{
+		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
 		{"--unpair", "aa:bb:cc:dd:ee:ff"},
 		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
 		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
@@ -70,9 +72,25 @@ func TestReleaseUnpairsAndVerifiesDisconnected(t *testing.T) {
 	}
 }
 
+func TestReleaseDoesNothingWhenAlreadyDisconnected(t *testing.T) {
+	clock := newFakeClock()
+	runner := &FakeRunner{Results: []CommandResult{{ExitCode: 0, Stdout: "0"}}}
+
+	err := release(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 2*time.Second, clock)
+	if err != nil {
+		t.Fatalf("release error: %v", err)
+	}
+
+	wantCalls := [][]string{{"--is-connected", "aa:bb:cc:dd:ee:ff"}}
+	if !reflect.DeepEqual(runner.Calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", runner.Calls, wantCalls)
+	}
+}
+
 func TestReleaseReturnsVerifyFailedForMalformedConnectedOutput(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{
+		{ExitCode: 0, Stdout: "maybe"},
 		{ExitCode: 0},
 		{ExitCode: 0, Stdout: "maybe"},
 		{ExitCode: 0, Stdout: ""},
@@ -88,9 +106,12 @@ func TestReleaseReturnsVerifyFailedForMalformedConnectedOutput(t *testing.T) {
 func TestAcquireRetriesConnectAfterVerifyFailureWithinBudget(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0},
 		{ExitCode: 0},
 		{ExitCode: 0},
+		{ExitCode: 0, Stdout: "0"},
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0, Stdout: "0"},
@@ -98,15 +119,18 @@ func TestAcquireRetriesConnectAfterVerifyFailureWithinBudget(t *testing.T) {
 		{ExitCode: 0, Stdout: "1"},
 	}}
 
-	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 5*time.Second, clock)
+	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 16*time.Second, clock)
 	if err != nil {
 		t.Fatalf("acquire error: %v", err)
 	}
 
 	wantCalls := [][]string{
+		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
 		{"--unpair", "aa:bb:cc:dd:ee:ff"},
 		{"--pair", "aa:bb:cc:dd:ee:ff"},
 		{"--connect", "aa:bb:cc:dd:ee:ff"},
+		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
+		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
 		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
 		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
 		{"--is-connected", "aa:bb:cc:dd:ee:ff"},
@@ -117,26 +141,59 @@ func TestAcquireRetriesConnectAfterVerifyFailureWithinBudget(t *testing.T) {
 		t.Fatalf("calls = %#v, want %#v", runner.Calls, wantCalls)
 	}
 
-	if got, want := runner.Timeouts[2], 2*time.Second; got != want {
+	if got, want := runner.Timeouts[3], 5*time.Second; got != want {
 		t.Fatalf("first connect timeout = %s, want %s", got, want)
 	}
-	if got, want := runner.Timeouts[6], 2*time.Second; got != want {
+	if got, want := runner.Timeouts[9], 5*time.Second; got != want {
 		t.Fatalf("retry connect timeout = %s, want %s", got, want)
+	}
+}
+
+func TestAcquireDoesNothingWhenAlreadyConnected(t *testing.T) {
+	clock := newFakeClock()
+	runner := &FakeRunner{Results: []CommandResult{{ExitCode: 0, Stdout: "1"}}}
+
+	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 2*time.Second, clock)
+	if err != nil {
+		t.Fatalf("acquire error: %v", err)
+	}
+
+	wantCalls := [][]string{{"--is-connected", "aa:bb:cc:dd:ee:ff"}}
+	if !reflect.DeepEqual(runner.Calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", runner.Calls, wantCalls)
+	}
+}
+
+func TestAcquireDoesNothingWhenConnectionStateIsUnknown(t *testing.T) {
+	clock := newFakeClock()
+	runner := &FakeRunner{Results: []CommandResult{{ExitCode: 1}}}
+
+	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 2*time.Second, clock)
+	if ErrorCode(err) != ErrVerifyFailed {
+		t.Fatalf("acquire error = %v, want %s", err, ErrVerifyFailed)
+	}
+
+	wantCalls := [][]string{{"--is-connected", "aa:bb:cc:dd:ee:ff"}}
+	if !reflect.DeepEqual(runner.Calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", runner.Calls, wantCalls)
 	}
 }
 
 func TestAcquireReturnsVerifyFailedWhenRetryBudgetIsInsufficient(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0},
 		{ExitCode: 0},
 		{ExitCode: 0},
+		{ExitCode: 0, Stdout: "0"},
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0, Stdout: "0"},
 	}}
 
-	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 1500*time.Millisecond, clock)
+	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 7500*time.Millisecond, clock)
 	if ErrorCode(err) != ErrVerifyFailed {
 		t.Fatalf("acquire error = %v, want %s", err, ErrVerifyFailed)
 	}
@@ -145,6 +202,7 @@ func TestAcquireReturnsVerifyFailedWhenRetryBudgetIsInsufficient(t *testing.T) {
 func TestAcquireReturnsPairFailed(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0},
 		{ExitCode: 1},
 	}}
@@ -158,6 +216,7 @@ func TestAcquireReturnsPairFailed(t *testing.T) {
 func TestAcquireReturnsConnectFailed(t *testing.T) {
 	clock := newFakeClock()
 	runner := &FakeRunner{Results: []CommandResult{
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0},
 		{ExitCode: 0},
 		{ExitCode: 1},
@@ -175,7 +234,7 @@ func TestAcquireReturnsClaimTimeoutWhenBudgetExpires(t *testing.T) {
 		{ExitCode: 0},
 	}}
 
-	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 300*time.Millisecond, clock)
+	err := acquire(context.Background(), runner, "aa:bb:cc:dd:ee:ff", 0, clock)
 	if ErrorCode(err) != ErrClaimTimeout {
 		t.Fatalf("acquire error = %v, want %s", err, ErrClaimTimeout)
 	}

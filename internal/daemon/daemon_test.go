@@ -31,7 +31,7 @@ func (s *memoryStore) Append(event state.Event) error {
 
 func TestClaimDuplicateClientRequestIDReplaysFinal(t *testing.T) {
 	store := &memoryStore{}
-	svc := NewService(testConfig(), store, &bluetooth.FakeRunner{})
+	svc := NewService(testConfig(), store, &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{{ExitCode: 0, Stdout: "0"}}})
 	req := protocol.LocalRequest{Type: protocol.LocalClaim, ClientRequestID: "client-1", Device: "trackpad", TimeoutMS: 11000}
 
 	first := svc.Handle(context.Background(), req)
@@ -61,6 +61,7 @@ func TestClaimDuplicateClientRequestIDReplaysFinal(t *testing.T) {
 func TestLocalReleaseRunsBluetoothAndAppendsState(t *testing.T) {
 	store := &memoryStore{}
 	runner := &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{
+		{ExitCode: 0, Stdout: "1"},
 		{ExitCode: 0},
 		{ExitCode: 0, Stdout: "0"},
 	}}
@@ -73,7 +74,7 @@ func TestLocalReleaseRunsBluetoothAndAppendsState(t *testing.T) {
 	if got := countEvents(store.events, state.EventLocalRelease); got != 1 {
 		t.Fatalf("local release events = %d, want 1", got)
 	}
-	if len(runner.Calls) < 2 || runner.Calls[0][0] != "--unpair" || runner.Calls[1][0] != "--is-connected" {
+	if len(runner.Calls) < 3 || runner.Calls[0][0] != "--is-connected" || runner.Calls[1][0] != "--unpair" || runner.Calls[2][0] != "--is-connected" {
 		t.Fatalf("unexpected bluetooth calls: %#v", runner.Calls)
 	}
 }
@@ -113,7 +114,7 @@ func TestDaemonLockAllowsOnlyOneActiveDaemon(t *testing.T) {
 }
 
 func TestPeerDuplicateReleaseReplaysStartedWithoutSecondUnpair(t *testing.T) {
-	runner := &recordingRunner{}
+	runner := &recordingRunner{connected: true}
 	svc := NewService(testConfig(), &memoryStore{}, runner)
 	req := protocol.Release{Protocol: protocol.Version, Type: protocol.TypeRelease, RequestID: mustID(t), Requester: "peer", Device: "aa:bb:cc:dd:ee:ff", ReleaseTTLMS: 50, MaxStartDelayMS: 300}
 
@@ -125,6 +126,23 @@ func TestPeerDuplicateReleaseReplaysStartedWithoutSecondUnpair(t *testing.T) {
 	}
 	if got := runner.count("--unpair"); got != 1 {
 		t.Fatalf("unpair calls = %d, want 1", got)
+	}
+}
+
+func TestPeerReleaseDoesNothingWhenAlreadyDisconnected(t *testing.T) {
+	runner := &recordingRunner{connected: false}
+	svc := NewService(testConfig(), &memoryStore{}, runner)
+	req := protocol.Release{Protocol: protocol.Version, Type: protocol.TypeRelease, RequestID: mustID(t), Requester: "peer", Device: "aa:bb:cc:dd:ee:ff", ReleaseTTLMS: 50, MaxStartDelayMS: 300}
+
+	reply := svc.handlePeerRelease(context.Background(), req)
+	if reply.Status != "started" {
+		t.Fatalf("status = %q, want started", reply.Status)
+	}
+	if got := runner.count("--unpair"); got != 0 {
+		t.Fatalf("unpair calls = %d, want 0", got)
+	}
+	if got := runner.count("--is-connected"); got != 1 {
+		t.Fatalf("is-connected calls = %d, want 1", got)
 	}
 }
 
@@ -143,6 +161,8 @@ func TestPeerReleaseReturnsBusyWhenLocalLockHeld(t *testing.T) {
 
 func TestClaimRetriesLostCoordinatorReplyWithSameRequestID(t *testing.T) {
 	svc := NewService(testConfig(), &memoryStore{}, &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{
+		{ExitCode: 0, Stdout: "0"},
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0},
 		{ExitCode: 0},
 		{ExitCode: 0},
@@ -169,6 +189,8 @@ func TestClaimFlowWithInProcessCoordinatorAndFakeBluetooth(t *testing.T) {
 	cfg := testConfig()
 	cfg.NodeName = "requester"
 	svc := NewService(cfg, &memoryStore{}, &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{
+		{ExitCode: 0, Stdout: "0"},
+		{ExitCode: 0, Stdout: "0"},
 		{ExitCode: 0},
 		{ExitCode: 0},
 		{ExitCode: 0},
@@ -183,6 +205,38 @@ func TestClaimFlowWithInProcessCoordinatorAndFakeBluetooth(t *testing.T) {
 	final := replies[1].(protocol.FinalResult)
 	if !final.OK || !final.Connected {
 		t.Fatalf("final = %+v", final)
+	}
+}
+
+func TestClaimAlreadyConnectedDoesNotContactCoordinator(t *testing.T) {
+	store := &memoryStore{}
+	runner := &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{{ExitCode: 0, Stdout: "1"}}}
+	svc := NewService(testConfig(), store, runner)
+	svc.coord = failingCoordinator{t: t}
+
+	final := svc.runClaim(context.Background(), mustID(t), "trackpad", "aa:bb:cc:dd:ee:ff", 11000)
+	if !final.OK || !final.Connected {
+		t.Fatalf("final = %+v", final)
+	}
+	if len(runner.Calls) != 1 || runner.Calls[0][0] != "--is-connected" {
+		t.Fatalf("connected claim should only check connection, calls=%#v", runner.Calls)
+	}
+	if got := countEvents(store.events, state.EventGuard); got != 1 {
+		t.Fatalf("guard events = %d, want 1", got)
+	}
+}
+
+func TestClaimUnknownLocalConnectionDoesNotContactCoordinator(t *testing.T) {
+	runner := &bluetooth.FakeRunner{Results: []bluetooth.CommandResult{{ExitCode: 1}}}
+	svc := NewService(testConfig(), &memoryStore{}, runner)
+	svc.coord = failingCoordinator{t: t}
+
+	final := svc.runClaim(context.Background(), mustID(t), "trackpad", "aa:bb:cc:dd:ee:ff", 11000)
+	if final.OK || final.Error != bluetooth.ErrVerifyFailed {
+		t.Fatalf("final = %+v, want verify_failed", final)
+	}
+	if len(runner.Calls) != 1 || runner.Calls[0][0] != "--is-connected" {
+		t.Fatalf("unknown-state claim should only check connection, calls=%#v", runner.Calls)
 	}
 }
 
@@ -235,9 +289,21 @@ func (c *flakyCoordinator) Claim(_ context.Context, claim protocol.Claim) (proto
 
 func (c *flakyCoordinator) Close() {}
 
+type failingCoordinator struct {
+	t *testing.T
+}
+
+func (c failingCoordinator) Claim(context.Context, protocol.Claim) (protocol.ClaimResult, error) {
+	c.t.Fatal("coordinator should not be contacted")
+	return protocol.ClaimResult{}, nil
+}
+
+func (c failingCoordinator) Close() {}
+
 type recordingRunner struct {
-	mu    sync.Mutex
-	calls [][]string
+	mu        sync.Mutex
+	calls     [][]string
+	connected bool
 }
 
 func (r *recordingRunner) Run(_ context.Context, _ time.Duration, args ...string) (bluetooth.CommandResult, error) {
@@ -245,6 +311,9 @@ func (r *recordingRunner) Run(_ context.Context, _ time.Duration, args ...string
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "--is-connected" {
+		if r.connected {
+			return bluetooth.CommandResult{ExitCode: 0, Stdout: "1"}, nil
+		}
 		return bluetooth.CommandResult{ExitCode: 0, Stdout: "0"}, nil
 	}
 	return bluetooth.CommandResult{ExitCode: 0}, nil

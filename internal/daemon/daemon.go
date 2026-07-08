@@ -432,6 +432,23 @@ func (s *Service) runClaim(ctx context.Context, requestID, device, address strin
 	}
 	deadline := start.Add(time.Duration(timeoutMS) * time.Millisecond)
 	result := protocol.FinalResult{Type: protocol.LocalFinalResult, RequestID: requestID, Device: device, Address: address}
+	connected, err := s.localConnected(ctx, address)
+	if err != nil {
+		result.Error = bluetooth.ErrVerifyFailed
+		result.DurationMS = time.Since(start).Milliseconds()
+		return result
+	}
+	if connected {
+		result.DurationMS = time.Since(start).Milliseconds()
+		result.OK = true
+		result.Connected = true
+		result.AcquireSeen = true
+		if err := s.persistGuard(address, deadline); err != nil {
+			result.OK = false
+			result.Error = protocol.ErrLogUnavailable
+		}
+		return result
+	}
 	coord := s.getCoordinator()
 	if coord == nil {
 		result.Error = protocol.ErrCoordinatorUnavailable
@@ -637,10 +654,18 @@ func (s *Service) handlePeerRelease(ctx context.Context, req protocol.Release) p
 		return reply
 	}
 
-	unpairCtx, cancel := context.WithTimeout(ctx, time.Second)
-	_, err := s.runner.Run(unpairCtx, time.Second, "--unpair", req.Device)
+	checkCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	connectedRes, err := s.runner.Run(checkCtx, 300*time.Millisecond, "--is-connected", req.Device)
+	checkTimedOut := checkCtx.Err() != nil
 	cancel()
-	if err != nil && unpairCtx.Err() != nil {
+	if err != nil || checkTimedOut {
+		s.unlock(req.Device)
+		reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrReleaseFailed}
+		s.rememberPeer(req, reply)
+		return reply
+	}
+	connected, err := bluetooth.ParseConnected(connectedRes)
+	if err != nil {
 		s.unlock(req.Device)
 		reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrReleaseFailed}
 		s.rememberPeer(req, reply)
@@ -648,6 +673,23 @@ func (s *Service) handlePeerRelease(ctx context.Context, req protocol.Release) p
 	}
 
 	reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "started"}
+	if !connected {
+		s.unlock(req.Device)
+		s.rememberPeer(req, reply)
+		return reply
+	}
+
+	unpairCtx, cancel := context.WithTimeout(ctx, time.Second)
+	_, err = s.runner.Run(unpairCtx, time.Second, "--unpair", req.Device)
+	unpairTimedOut := unpairCtx.Err() != nil
+	cancel()
+	if err != nil && unpairTimedOut {
+		s.unlock(req.Device)
+		reply := protocol.ReleaseReply{Protocol: protocol.Version, Type: protocol.TypeReleaseReply, RequestID: req.RequestID, Status: "fail", Reason: protocol.ErrReleaseFailed}
+		s.rememberPeer(req, reply)
+		return reply
+	}
+
 	s.rememberPeer(req, reply)
 	go s.finishPeerRelease(req)
 	return reply

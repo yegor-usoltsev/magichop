@@ -23,12 +23,12 @@ const (
 	releaseVerifyTimeout  = 300 * time.Millisecond
 	releasePollInterval   = 200 * time.Millisecond
 	releaseWindow         = 2 * time.Second
-	acquireSettleSleep    = 300 * time.Millisecond
-	pairTimeout           = 5 * time.Second
-	connectAttemptTimeout = 2 * time.Second
-	acquireVerifyTimeout  = 300 * time.Millisecond
+	acquireSettleSleep    = 500 * time.Millisecond
+	pairTimeout           = 8 * time.Second
+	connectAttemptTimeout = 5 * time.Second
+	acquireVerifyTimeout  = time.Second
 	acquirePollInterval   = 200 * time.Millisecond
-	acquireVerifyWindow   = 500 * time.Millisecond
+	acquireVerifyWindow   = time.Second
 )
 
 type CommandResult struct {
@@ -215,7 +215,21 @@ func runBounded(ctx context.Context, runner Runner, deadline flowDeadline, timeo
 func release(ctx context.Context, runner Runner, address string, budget time.Duration, c clock) error {
 	deadline := newFlowDeadline(c, budget)
 	windowEnd := c.Now().Add(releaseWindow)
-	_, err := runBounded(ctx, runner, deadline, unpairTimeout, "--unpair", address)
+	res, err := runBounded(ctx, runner, deadline, releaseVerifyTimeout, "--is-connected", address)
+	if ErrorCode(err) == ErrClaimTimeout {
+		return err
+	}
+	if err != nil {
+		return FlowError{Code: ErrVerifyFailed}
+	}
+	connected, parseErr := ParseConnected(res)
+	if parseErr != nil {
+		return FlowError{Code: ErrVerifyFailed}
+	}
+	if !connected {
+		return nil
+	}
+	_, err = runBounded(ctx, runner, deadline, unpairTimeout, "--unpair", address)
 	if errors.As(err, &FlowError{}) {
 		return err
 	}
@@ -232,6 +246,20 @@ func release(ctx context.Context, runner Runner, address string, budget time.Dur
 
 func acquire(ctx context.Context, runner Runner, address string, budget time.Duration, c clock) error {
 	deadline := newFlowDeadline(c, budget)
+	res, err := runBounded(ctx, runner, deadline, acquireVerifyTimeout, "--is-connected", address)
+	if ErrorCode(err) == ErrClaimTimeout {
+		return err
+	}
+	if err != nil {
+		return FlowError{Code: ErrVerifyFailed}
+	}
+	connected, parseErr := ParseConnected(res)
+	if parseErr != nil {
+		return FlowError{Code: ErrVerifyFailed}
+	}
+	if connected {
+		return nil
+	}
 	if _, err := runBounded(ctx, runner, deadline, unpairTimeout, "--unpair", address); err != nil {
 		if ErrorCode(err) == ErrClaimTimeout {
 			return err
